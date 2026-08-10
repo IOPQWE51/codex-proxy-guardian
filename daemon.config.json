@@ -1,0 +1,11 @@
+{
+  "clashApiUrl": "http://127.0.0.1:9090",
+  "pollIntervalSeconds": 35,
+  "requestTimeoutSeconds": 8,
+  "downThreshold": 3,
+  "proxyTestUrl": "https://www.gstatic.com/generate_204",
+  "noProxy": "localhost,127.*,10.*,192.168.*,*.local",
+  "proxyOverride": "localhost;*.local;127.*;10.*;192.168.*",
+  "maxLogBytes": 2097152,
+  "maxLogFiles": 3
+}
