@@ -78,7 +78,7 @@ function Get-DaemonConfig {
     if (Test-Path $script:ConfigPath) {
         try {
             $loaded = Get-Content -Raw -LiteralPath $script:ConfigPath | ConvertFrom-Json
-            foreach ($p in $cfg.Keys) {
+            foreach ($p in @($cfg.Keys)) {
                 $v = $loaded.$p
                 if ($null -ne $v) { $cfg[$p] = $v }
             }
@@ -93,7 +93,18 @@ function Invoke-ClashApi {
     param([string]$Path)
     $uri = "$($script:Config.clashApiUrl)$Path"
     try {
-        return (Invoke-RestMethod -Uri $uri -TimeoutSec $script:Config.requestTimeoutSeconds)
+        $req = [System.Net.HttpWebRequest]::Create($uri)
+        $req.Timeout = ([int]$script:Config.requestTimeoutSeconds * 1000)
+        $req.Accept = 'application/json'
+        $resp = $req.GetResponse()
+        try {
+            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+            $json = $reader.ReadToEnd()
+            $reader.Dispose()
+        } finally {
+            $resp.Close()
+        }
+        return ($json | ConvertFrom-Json)
     } catch {
         return $null
     }
