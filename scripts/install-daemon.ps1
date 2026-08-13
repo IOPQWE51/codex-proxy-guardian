@@ -4,8 +4,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$main = Join-Path $root 'codex-proxy-daemon.ps1'
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$main = Join-Path $scriptDir 'codex-proxy-guardian.ps1'
 if (-not (Test-Path -LiteralPath $main)) {
     throw "未找到 $main"
 }
