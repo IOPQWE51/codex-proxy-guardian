@@ -21,6 +21,7 @@ Remove-ItemProperty -Path $runKey -Name 'CodexProxyGuardianTray' -ErrorAction Si
 '已移除托盘开机自启'
 
 Get-Process -Name 'GuardianTray' -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name 'GuardianDaemon' -ErrorAction SilentlyContinue | Stop-Process -Force
 '已关闭托盘进程'
 
 if ($KeepProxy) {

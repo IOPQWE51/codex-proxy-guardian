@@ -15,8 +15,9 @@ if ($task) {
 }
 
 # Unregister 不会结束仍在运行的守护进程，这里显式停止，避免孤儿进程继续改代理
-$daemonProcs = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'codex-proxy-guardian\.ps1' }
+$daemonProcs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'codex-proxy-guardian\.ps1' })
+$daemonProcs += @(Get-Process -Name 'GuardianDaemon' -ErrorAction SilentlyContinue)
 $stopped = 0
 foreach ($proc in $daemonProcs) {
     try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop; $stopped++ } catch { }

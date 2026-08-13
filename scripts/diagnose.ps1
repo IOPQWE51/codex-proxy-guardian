@@ -25,6 +25,13 @@ Emit '项目根' $root
 $task = Get-ScheduledTask -TaskName 'CodexProxyDaemon' -ErrorAction SilentlyContinue
 if ($task) {
     Emit '守护任务' $task.State
+    # 判断守护引擎
+    $daemonExe = Join-Path $root 'dist\GuardianDaemon.exe'
+    if ((Test-Path -LiteralPath $daemonExe) -and ($task.Actions[0].Execute -like '*GuardianDaemon.exe*')) {
+        Emit '守护引擎' 'GuardianDaemon.exe (独立进程)'
+    } else {
+        Emit '守护引擎' 'codex-proxy-guardian.ps1 (PowerShell)'
+    }
     $info = Get-ScheduledTaskInfo -TaskName 'CodexProxyDaemon' -ErrorAction SilentlyContinue
     if ($info) {
         Emit '最后运行' "$($info.LastRunTime) (结果 $($info.LastTaskResult))"

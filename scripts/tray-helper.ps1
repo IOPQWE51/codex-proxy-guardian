@@ -87,7 +87,24 @@ switch ($Action) {
     'Stop'     { Stop-ScheduledTask  -TaskName 'CodexProxyDaemon'; 'stopped' }
     'Enable'   { Enable-ScheduledTask  -TaskName 'CodexProxyDaemon'; 'enabled' }
     'Disable'  { Disable-ScheduledTask -TaskName 'CodexProxyDaemon'; 'disabled' }
-    'Detect'   { & $guardian -Test -DryRun }
+    'Detect'   {
+        # 优先用独立守护 exe；GUI 子系统 exe 不会让 PowerShell 同步等待，用 Process 重定向同步读取
+        $exe = Join-Path $root 'dist\GuardianDaemon.exe'
+        if (Test-Path -LiteralPath $exe) {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $exe
+            $psi.Arguments = '-Test -DryRun'
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.CreateNoWindow = $true
+            $pr = [System.Diagnostics.Process]::Start($psi)
+            $out = $pr.StandardOutput.ReadToEnd()
+            $pr.WaitForExit()
+            $out.Trim()
+        } else {
+            & $guardian -Test -DryRun
+        }
+    }
     'Install'  { & (Join-Path $root 'scripts\install-daemon.ps1') -Force }
     'Uninstall'{ & (Join-Path $root 'scripts\uninstall-daemon.ps1') }
 

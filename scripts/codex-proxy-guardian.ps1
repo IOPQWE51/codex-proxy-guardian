@@ -91,6 +91,12 @@ function Write-Log {
     $ts = $now.ToString('yyyy-MM-dd HH:mm:ss')
     $line = "$ts $Message"
     try {
+        # 磁盘空间防护：剩余空间不足 64MB 时静默跳过，绝不把磁盘写满
+        $logRoot = Split-Path -Qualifier $script:LogDir
+        if ($logRoot) {
+            $drive = Get-PSDrive -Name ($logRoot.TrimEnd(':').TrimEnd('\'))
+            if ($null -ne $drive -and $drive.Free -lt (64MB)) { return }
+        }
         if (-not (Test-Path $script:LogDir)) {
             New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null
         }
