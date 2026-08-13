@@ -82,6 +82,7 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `clashApiUrl` | `http://127.0.0.1:9090` | Clash 内核管理地址（换代理软件只改这里） |
+| `clashApiSecret` | （空） | Clash 内核密钥，需要认证时填写（Bearer） |
 | `pollIntervalSeconds` | `35` | 轮询间隔（钳制 5–600） |
 | `requestTimeoutSeconds` | `8` | API / 探活超时（钳制 2–30） |
 | `downSeconds` | `90` | 连续失败判定下线的秒数（钳制 15–600） |
@@ -107,6 +108,14 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 ```
 
 托盘程序退出即移除；`托盘开机自启` 可在托盘菜单取消。
+
+## 自测
+
+```powershell
+.\scripts\self-test.ps1     # 隔离沙盒验证：配置钳制、白名单合并、宽限时间窗、日志轮转与防爆
+```
+
+不修改真实配置、环境变量或注册表。
 
 ## 开发与构建
 

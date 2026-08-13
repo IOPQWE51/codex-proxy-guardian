@@ -41,6 +41,8 @@ $script:Config      = $null
 $script:failCount   = 0
 $script:firstFailAt = [datetime]::MinValue
 $script:lastUp      = $true
+$script:seenUp        = $false
+$script:DaemonVersion = '2.1.0'
 $script:lastPort    = 0
 $script:lastNode    = ''
 $script:lastNodeLogTime = [datetime]::MinValue
@@ -50,6 +52,7 @@ $script:logFailStreak   = 0
 # 默认配置
 $script:DefaultConfig = @{
     clashApiUrl           = 'http://127.0.0.1:9090'
+    clashApiSecret        = ''
     pollIntervalSeconds   = 35
     requestTimeoutSeconds = 8
     downThreshold         = 3
@@ -102,13 +105,12 @@ function Write-Log {
         if (Test-Path $logFile) {
             $len = (Get-Item $logFile).Length
             if ($len -gt $maxBytes) {
-                for ($i = $maxFiles; $i -ge 1; $i--) {
-                    $old = "$logFile.$i"
-                    if (Test-Path $old) { Remove-Item -LiteralPath $old -Force }
-                }
+                # 标准移位轮转：先删最旧（.maxFiles），再把 .N-1 -> .N ... .1 -> .2，主文件 -> .1
+                $oldest = "$logFile.$maxFiles"
+                if (Test-Path -LiteralPath $oldest) { Remove-Item -LiteralPath $oldest -Force }
                 for ($i = $maxFiles - 1; $i -ge 1; $i--) {
                     $src = "$logFile.$i"
-                    if (Test-Path $src) { Move-Item -LiteralPath $src -Destination "$logFile.$($i+1)" -Force }
+                    if (Test-Path -LiteralPath $src) { Move-Item -LiteralPath $src -Destination "$logFile.$($i+1)" -Force }
                 }
                 Move-Item -LiteralPath $logFile -Destination "$logFile.1" -Force
             }
@@ -163,6 +165,7 @@ function Get-DaemonConfig {
         $s = ([string]$d).Trim()
         if ($s -ne '' -and $direct -notcontains $s) { $direct += $s }
     }
+    $cfg['directDomains'] = $direct
     $noProxy = @()
     foreach ($p in (([string]$cfg['noProxy']) -split ',')) {
         $s = $p.Trim()
@@ -185,6 +188,10 @@ function Invoke-ClashApi {
         $req = [System.Net.HttpWebRequest]::Create($uri)
         $req.Timeout = ([int]$script:Config.requestTimeoutSeconds * 1000)
         $req.Accept = 'application/json'
+        $secret = [string]$script:Config.clashApiSecret
+        if ($secret -ne '') {
+            $req.Headers.Add('Authorization', ('Bearer ' + $secret))
+        }
         $resp = $req.GetResponse()
         try {
             $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
@@ -204,7 +211,8 @@ function Test-ProxyHealth {
     if ($Port -le 0) { return $false }
     try {
         $r = Invoke-WebRequest -Uri $script:Config.proxyTestUrl -Proxy "http://127.0.0.1:$Port" -TimeoutSec ([int]$script:Config.requestTimeoutSeconds) -UseBasicParsing
-        return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 400)
+        # 任何真实 HTTP 响应（含 4xx）都说明隧道可用；仅网络异常判失败
+        return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500)
     } catch {
         return $false
     }
@@ -240,17 +248,25 @@ function Get-DetectedState {
     if ($UseGrace) {
         # 时间窗判定：连续 downSeconds 秒失败才判定下线，避免 FlClash 频繁开关误清配置
         if ($state.ApiOk -and $state.Health) {
+            $script:seenUp = $true
             $script:firstFailAt = [datetime]::MinValue
             $state.Up = $true
         } else {
-            if ($script:firstFailAt -eq [datetime]::MinValue) {
-                $script:firstFailAt = [datetime]::Now
-            }
-            $elapsed = ([datetime]::Now - $script:firstFailAt).TotalSeconds
-            if ($elapsed -ge [double]$cfg.downSeconds) {
+            if (-not $script:seenUp) {
+                # 本会话从未观测到代理在线（如开机时 FlClash 尚未启动）：立即判下线，不残留死代理配置
                 $state.Up = $false
-            } else {
+                $script:firstFailAt = [datetime]::MinValue
+            } elseif ($script:firstFailAt -eq [datetime]::MinValue) {
+                # 首次失败：进入宽限期，保持在线
+                $script:firstFailAt = [datetime]::Now
                 $state.Up = $true
+            } else {
+                $elapsed = ([datetime]::Now - $script:firstFailAt).TotalSeconds
+                if ($elapsed -ge [double]$cfg.downSeconds) {
+                    $state.Up = $false
+                } else {
+                    $state.Up = $true
+                }
             }
         }
     } else {
@@ -331,6 +347,22 @@ function Get-WinInetState {
     }
 }
 
+function Merge-OverrideList {
+    param([string]$Current, [string]$Want)
+    $have = @()
+    foreach ($p in ($Current -split ';')) {
+        $s = $p.Trim()
+        if ($s -ne '' -and $have -notcontains $s) { $have += $s }
+    }
+    $wantList = @()
+    foreach ($p in ($Want -split ';')) {
+        $s = $p.Trim()
+        if ($s -ne '' -and $wantList -notcontains $s) { $wantList += $s }
+    }
+    $missing = @($wantList | Where-Object { $have -notcontains $_ })
+    if ($missing.Count -eq 0) { return $Current }
+    return (($have + $missing) | Select-Object -Unique) -join ';'
+}
 function Set-WinInetState {
     param([bool]$Up, [int]$Port)
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
@@ -343,9 +375,10 @@ function Set-WinInetState {
             Set-ItemProperty -Path $key -Name ProxyServer -Value $server
             $changed = $true
         }
-        # 保留用户既有的绕过列表，仅在为空时补上默认值
-        if ($current.ProxyOverride -eq '') {
-            Set-ItemProperty -Path $key -Name ProxyOverride -Value $script:Config.proxyOverride
+        # 保留用户既有的绕过列表，仅追加缺失的默认/直连条目
+        $merged = Merge-OverrideList -Current $current.ProxyOverride -Want ([string]$script:Config.proxyOverride)
+        if ($merged -ne $current.ProxyOverride) {
+            Set-ItemProperty -Path $key -Name ProxyOverride -Value $merged
             $changed = $true
         }
     } else {
@@ -364,6 +397,7 @@ function Set-WinInetState {
 function Update-StateFile {
     param($State, [string]$Message, [bool]$EnvChanged, [bool]$InetChanged)
     $obj = [PSCustomObject]@{
+        version            = $script:DaemonVersion
         updatedAt          = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
         proxyUp            = $State.Up
         port               = $State.Port
@@ -455,7 +489,7 @@ if (-not $mutex.WaitOne(0)) {
     exit
 }
 try {
-    Write-Log "守护脚本启动 v2 (poll=$($script:Config.pollIntervalSeconds)s, downSeconds=$($script:Config.downSeconds)s, directDomains=$([string]::Join(',', @($script:Config.directDomains))))"
+    Write-Log "守护脚本启动 v$($script:DaemonVersion) (poll=$($script:Config.pollIntervalSeconds)s, downSeconds=$($script:Config.downSeconds)s, directDomains=$([string]::Join(',', @($script:Config.directDomains))))"
     while ($true) {
         try {
             $state = Get-DetectedState -UseGrace

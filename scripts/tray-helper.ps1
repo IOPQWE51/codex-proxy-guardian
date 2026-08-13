@@ -25,7 +25,8 @@ switch ($Action) {
             "port=$($s.port)"
             "node=$($s.node)"
             "mode=$($s.mode)"
-            "message=$($s.message)"
+"message=$($s.message)"
+            "version=$($s.version)"
             "nextCheck=$($s.nextCheck)"
         } catch {
             'proxyUp='

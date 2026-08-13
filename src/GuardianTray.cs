@@ -236,6 +236,7 @@ namespace CodexProxyGuardian
             RefreshState();
             var sb = new StringBuilder();
             sb.AppendLine("守护任务: " + TaskLabel(Get(_state, "task", "Unknown")));
+            sb.AppendLine("版本: " + Get(_state, "version", "-"));
             string up = Get(_state, "proxyUp", "");
             if (up == "True")
             {
