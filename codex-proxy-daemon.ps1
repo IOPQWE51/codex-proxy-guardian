@@ -1,4 +1,24 @@
-﻿[CmdletBinding()]
+<#
+.SYNOPSIS
+    Codex 代理守护脚本
+.DESCRIPTION
+    检测 FlClash（127.0.0.1:9090 Clash API）并维护 Codex 的代理配置。
+    - 代理在线时：设置用户级环境变量 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY = http://127.0.0.1:<mixed-port>
+    - 代理下线时：清空环境变量、关闭残留系统代理，让 DeepSeek 等可直连
+    - 常驻循环：每 35 秒检测一次，连续 3 次失败判定下线
+    - 不自动重启 Codex，配置变化后重启 Codex 生效
+
+    使用方式：
+        .\codex-proxy-daemon.ps1 -Test -DryRun   # 只检测，不修改
+        .\codex-proxy-daemon.ps1 -Test            # 单次检测并应用
+        无参数                                # 常驻守护模式（由计划任务调用）
+
+    停用/卸载：
+        Stop-ScheduledTask -TaskName "CodexProxyDaemon"
+        # 或运行 .\uninstall-daemon.ps1 -ClearEnv -DisableSystemProxy
+#>
+
+[CmdletBinding()]
 param(
     [switch]$Test,
     [switch]$DryRun
@@ -348,6 +368,7 @@ if ($Test) {
     exit
 }
 
+try {
 Write-Log "守护脚本启动 (poll=$($script:Config.pollIntervalSeconds)s, threshold=$($script:Config.downThreshold))"
 
 $mutex = New-Object System.Threading.Mutex($false, 'CodexProxyDaemonMutex')
@@ -366,4 +387,19 @@ try {
     }
 } finally {
     $mutex.ReleaseMutex()
+}} catch {
+    $errMsg = $_.Exception.ToString()
+    Write-Log "未处理异常，守护进程崩溃: $errMsg"
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        [System.Windows.Forms.MessageBox]::Show(
+            "守护脚本出错: $($_.Exception.Message)`n`n日志路径: $script:DefaultLogFile",
+            'Codex 代理守护 - 崩溃',
+            'OK',
+            'Error'
+        ) | Out-Null
+    } catch {
+        Write-Log "崩溃弹窗失败: $($_.Exception.Message)"
+    }
+    throw
 }
