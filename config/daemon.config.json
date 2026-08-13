@@ -3,9 +3,21 @@
   "pollIntervalSeconds": 35,
   "requestTimeoutSeconds": 8,
   "downThreshold": 3,
+  "downSeconds": 90,
   "proxyTestUrl": "https://www.gstatic.com/generate_204",
-  "noProxy": "localhost,127.*,10.*,192.168.*,*.local,*.deepseek.com",
-  "proxyOverride": "localhost;*.local;127.*;10.*;192.168.*;*.deepseek.com",
+  "noProxy": "localhost,127.*,10.*,192.168.*,*.local",
+  "proxyOverride": "localhost;*.local;127.*;10.*;192.168.*",
+  "directDomains": [
+    "*.deepseek.com",
+    "*.qwen.ai",
+    "*.dashscope.aliyuncs.com",
+    "*.moonshot.cn",
+    "*.bigmodel.cn",
+    "*.siliconflow.cn",
+    "*.minimaxi.com",
+    "*.api.volces.com"
+  ],
+  "nodeLogCooldownSeconds": 60,
   "maxLogBytes": 2097152,
   "maxLogFiles": 3
 }

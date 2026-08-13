@@ -1,21 +1,24 @@
-<#
+﻿<#
 .SYNOPSIS
-    Codex 代理守护脚本
+    Codex 代理守护脚本 v2（健壮版）
 .DESCRIPTION
     检测 FlClash（127.0.0.1:9090 Clash API）并维护 Codex 的代理配置。
     - 代理在线时：设置用户级环境变量 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY = http://127.0.0.1:<mixed-port>
-    - 代理下线时：清空环境变量、关闭残留系统代理，让 DeepSeek 等可直连
-    - 常驻循环：每 35 秒检测一次，连续 3 次失败判定下线
-    - 不自动重启 Codex，配置变化后重启 Codex 生效
+    - 代理下线时：清空环境变量、关闭残留系统代理，让境内直连 API 正常访问
+    - 常驻循环：默认每 35 秒检测，连续 90 秒失败判定下线
+    - FlClash 频繁开关：上线即时恢复，下线有时间窗口滞后保护
+    - 国内 API 直连白名单：DeepSeek / 通义 / Moonshot 等不走代理
+    - 日志防写爆：硬上限 + 轮转，异常时不会无限写盘
+    - 单轮容错：每轮检测失败记录并继续，不退出守护
 
     使用方式：
-        .\codex-proxy-daemon.ps1 -Test -DryRun   # 只检测，不修改
-        .\codex-proxy-daemon.ps1 -Test            # 单次检测并应用
+        .\codex-proxy-guardian.ps1 -Test -DryRun   # 只检测不修改
+        .\codex-proxy-guardian.ps1 -Test            # 单次检测并应用
         无参数                                # 常驻守护模式（由计划任务调用）
 
     停用/卸载：
         Stop-ScheduledTask -TaskName "CodexProxyDaemon"
-        # 或运行 .\uninstall-daemon.ps1 -ClearEnv -DisableSystemProxy
+        或运行 .\uninstall-daemon.ps1 -ClearEnv -DisableSystemProxy
 #>
 
 [CmdletBinding()]
@@ -26,42 +29,61 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 路径
 $script:ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$script:Root = Split-Path -Parent $script:ScriptDir
+$script:Root      = Split-Path -Parent $script:ScriptDir
 $script:ConfigPath = Join-Path (Join-Path $script:Root 'config') 'daemon.config.json'
-$script:StatePath = Join-Path $script:Root 'state.json'
-$script:LogDir = Join-Path $script:Root 'logs'
-$script:Config = $null
-$script:failCount = 0
-$script:lastUp = $true
-$script:lastPort = 0
-$script:lastNode = ''
+$script:StatePath  = Join-Path $script:Root 'state.json'
+$script:LogDir     = Join-Path $script:Root 'logs'
 
+# 运行时状态
+$script:Config      = $null
+$script:failCount   = 0
+$script:firstFailAt = [datetime]::MinValue
+$script:lastUp      = $true
+$script:lastPort    = 0
+$script:lastNode    = ''
+$script:lastNodeLogTime = [datetime]::MinValue
+$script:logQuietUntil   = [datetime]::MinValue
+$script:logFailStreak   = 0
+
+# 默认配置
 $script:DefaultConfig = @{
-    clashApiUrl         = 'http://127.0.0.1:9090'
-    pollIntervalSeconds = 35
+    clashApiUrl           = 'http://127.0.0.1:9090'
+    pollIntervalSeconds   = 35
     requestTimeoutSeconds = 8
-    downThreshold       = 3
-    proxyTestUrl        = 'https://www.gstatic.com/generate_204'
-    noProxy             = 'localhost,127.*,10.*,192.168.*,*.local,*.deepseek.com'
-    proxyOverride       = 'localhost;*.local;127.*;10.*;192.168.*;*.deepseek.com'
-    maxLogBytes         = 2097152
-    maxLogFiles         = 3
+    downThreshold         = 3
+    downSeconds           = 90
+    proxyTestUrl          = 'https://www.gstatic.com/generate_204'
+    noProxy               = 'localhost,127.*,10.*,192.168.*,*.local'
+    proxyOverride         = 'localhost;*.local;127.*;10.*;192.168.*'
+    directDomains         = @('*.deepseek.com')
+    nodeLogCooldownSeconds = 60
+    maxLogBytes           = 2097152
+    maxLogFiles           = 3
 }
 
-# 供 Write-Log 在配置尚未加载时使用的默认日志路径
 $script:DefaultLogFile = Join-Path $script:LogDir 'daemon.log'
 
+# Win32 广播
 if (-not ('CodexDaemon.Native' -as [type])) {
-    Add-Type -Namespace CodexDaemon -Name Native -MemberDefinition @"
+    $memberDef = @"
 [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
 public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
 "@
+    Add-Type -Namespace CodexDaemon -Name Native -MemberDefinition $memberDef
 }
 
 function Write-Log {
     param([string]$Message)
-    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $now = [datetime]::Now
+    if ($now -lt $script:logQuietUntil) { return }
+    if ($script:logFailStreak -ge 20) {
+        $script:logQuietUntil = $now.AddSeconds(300)
+        $script:logFailStreak = 0
+        return
+    }
+    $ts = $now.ToString('yyyy-MM-dd HH:mm:ss')
     $line = "$ts $Message"
     try {
         if (-not (Test-Path $script:LogDir)) {
@@ -74,6 +96,9 @@ function Write-Log {
             $maxBytes = [int]$script:Config.maxLogBytes
             $maxFiles = [int]$script:Config.maxLogFiles
         }
+        if ($maxBytes -lt 102400) { $maxBytes = 102400 }
+        if ($maxFiles -lt 1) { $maxFiles = 1 }
+        if ($maxFiles -gt 10) { $maxFiles = 10 }
         if (Test-Path $logFile) {
             $len = (Get-Item $logFile).Length
             if ($len -gt $maxBytes) {
@@ -89,24 +114,67 @@ function Write-Log {
             }
         }
         Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
+        $script:logFailStreak = 0
     } catch {
-        # 日志不可写时静默，避免递归报错
+        $script:logFailStreak++
+        if ($script:logFailStreak -ge 20) {
+            $script:logQuietUntil = [datetime]::Now.AddSeconds(300)
+            $script:logFailStreak = 0
+        }
     }
+}
+function Clamp-Int {
+    param($Value, [int]$Min, [int]$Max)
+    try { $v = [int]$Value } catch { return $Min }
+    if ($v -lt $Min) { return $Min }
+    if ($v -gt $Max) { return $Max }
+    return $v
 }
 
 function Get-DaemonConfig {
-    $cfg = $script:DefaultConfig.Clone()
-    if (Test-Path $script:ConfigPath) {
+    $cfg = @{}
+    foreach ($k in $script:DefaultConfig.Keys) { $cfg[$k] = $script:DefaultConfig[$k] }
+    if (Test-Path -LiteralPath $script:ConfigPath) {
         try {
             $loaded = Get-Content -Raw -LiteralPath $script:ConfigPath | ConvertFrom-Json
-            foreach ($p in @($cfg.Keys)) {
-                $v = $loaded.$p
-                if ($null -ne $v) { $cfg[$p] = $v }
+            foreach ($k in @($cfg.Keys)) {
+                $v = $loaded.$k
+                if ($null -ne $v) { $cfg[$k] = $v }
             }
         } catch {
             Write-Log "配置读取失败，使用默认配置: $($_.Exception.Message)"
         }
     }
+    # 数值钳制，防止配置写错导致异常
+    $cfg['pollIntervalSeconds']    = Clamp-Int $cfg['pollIntervalSeconds'] 5 600
+    $cfg['requestTimeoutSeconds']  = Clamp-Int $cfg['requestTimeoutSeconds'] 2 30
+    $cfg['downSeconds']            = Clamp-Int $cfg['downSeconds'] 15 600
+    $cfg['nodeLogCooldownSeconds'] = Clamp-Int $cfg['nodeLogCooldownSeconds'] 5 3600
+    $cfg['maxLogBytes']            = Clamp-Int $cfg['maxLogBytes'] 102400 10485760
+    $cfg['maxLogFiles']            = Clamp-Int $cfg['maxLogFiles'] 1 10
+
+    # 合并 directDomains 到 NO_PROXY / ProxyOverride
+    $rawDirect = $cfg['directDomains']
+    if ($rawDirect -is [System.Array]) { $directList = @($rawDirect) }
+    elseif ($null -ne $rawDirect -and [string]$rawDirect -ne '') { $directList = @(([string]$rawDirect) -split ',') }
+    else { $directList = @() }
+    $direct = @()
+    foreach ($d in $directList) {
+        $s = ([string]$d).Trim()
+        if ($s -ne '' -and $direct -notcontains $s) { $direct += $s }
+    }
+    $noProxy = @()
+    foreach ($p in (([string]$cfg['noProxy']) -split ',')) {
+        $s = $p.Trim()
+        if ($s -ne '' -and $noProxy -notcontains $s) { $noProxy += $s }
+    }
+    $cfg['noProxy'] = (($noProxy + $direct) | Select-Object -Unique) -join ','
+    $override = @()
+    foreach ($p in (([string]$cfg['proxyOverride']) -split ';')) {
+        $s = $p.Trim()
+        if ($s -ne '' -and $override -notcontains $s) { $override += $s }
+    }
+    $cfg['proxyOverride'] = (($override + $direct) | Select-Object -Unique) -join ';'
     return $cfg
 }
 
@@ -135,15 +203,15 @@ function Test-ProxyHealth {
     param([int]$Port)
     if ($Port -le 0) { return $false }
     try {
-        $r = Invoke-WebRequest -Uri $script:Config.proxyTestUrl -Proxy "http://127.0.0.1:$Port" -TimeoutSec $script:Config.requestTimeoutSeconds -UseBasicParsing
-        return ($r.StatusCode -eq 204)
+        $r = Invoke-WebRequest -Uri $script:Config.proxyTestUrl -Proxy "http://127.0.0.1:$Port" -TimeoutSec ([int]$script:Config.requestTimeoutSeconds) -UseBasicParsing
+        return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 400)
     } catch {
         return $false
     }
 }
 
 function Get-DetectedState {
-    param([switch]$UseThreshold)
+    param([switch]$UseGrace)
     $cfg = $script:Config
     $state = [PSCustomObject]@{
         Up     = $false
@@ -169,16 +237,20 @@ function Get-DetectedState {
     } else {
         $state.Mode = 'api-unreachable'
     }
-    if ($UseThreshold) {
+    if ($UseGrace) {
+        # 时间窗判定：连续 downSeconds 秒失败才判定下线，避免 FlClash 频繁开关误清配置
         if ($state.ApiOk -and $state.Health) {
-            $script:failCount = 0
+            $script:firstFailAt = [datetime]::MinValue
             $state.Up = $true
         } else {
-            $script:failCount++
-            if ($script:failCount -ge $cfg.downThreshold) {
+            if ($script:firstFailAt -eq [datetime]::MinValue) {
+                $script:firstFailAt = [datetime]::Now
+            }
+            $elapsed = ([datetime]::Now - $script:firstFailAt).TotalSeconds
+            if ($elapsed -ge [double]$cfg.downSeconds) {
                 $state.Up = $false
             } else {
-                $state.Up = $script:lastUp
+                $state.Up = $true
             }
         }
     } else {
@@ -202,10 +274,10 @@ function Get-DesiredEnvState {
     $desired = @{}
     if ($Up -and $Port -gt 0) {
         $proxy = "http://127.0.0.1:$Port"
-        $desired['HTTP_PROXY'] = $proxy
+        $desired['HTTP_PROXY']  = $proxy
         $desired['HTTPS_PROXY'] = $proxy
-        $desired['ALL_PROXY'] = $proxy
-        $desired['NO_PROXY'] = [string]$script:Config.noProxy
+        $desired['ALL_PROXY']   = $proxy
+        $desired['NO_PROXY']    = [string]$script:Config.noProxy
     } else {
         foreach ($v in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')) {
             $desired[$v] = ''
@@ -271,10 +343,13 @@ function Set-WinInetState {
             Set-ItemProperty -Path $key -Name ProxyServer -Value $server
             $changed = $true
         }
+        # 保留用户既有的绕过列表，仅在为空时补上默认值
         if ($current.ProxyOverride -eq '') {
             Set-ItemProperty -Path $key -Name ProxyOverride -Value $script:Config.proxyOverride
+            $changed = $true
         }
     } else {
+        # 只关闭我们自己写过的 127.0.0.1 系统代理，不碰用户其他代理设置
         if ($current.ProxyEnable -eq 1 -and $current.ProxyServer -match '^127\.0\.0\.1:\d+$') {
             Set-ItemProperty -Path $key -Name ProxyEnable -Value 0
             $changed = $true
@@ -310,18 +385,20 @@ function Invoke-ApplyProxyState {
     param($State)
     $envChanged = Set-UserEnvState -Desired (Get-DesiredEnvState -Up $State.Up -Port $State.Port)
     $inetChanged = Set-WinInetState -Up $State.Up -Port $State.Port
+    $now = [datetime]::Now
 
     if ($State.Up) {
         if (-not $script:lastUp) {
             Write-Log "代理上线：端口 $($State.Port)，节点 $($State.Node)，模式 $($State.Mode)"
-        } elseif ($script:lastPort -ne $State.Port) {
+        } elseif ($script:lastPort -gt 0 -and $script:lastPort -ne $State.Port) {
             Write-Log "代理端口变化：$script:lastPort -> $($State.Port)"
-        } elseif ($script:lastNode -ne $State.Node) {
+        } elseif ($script:lastNode -ne '' -and $script:lastNode -ne $State.Node -and ($now - $script:lastNodeLogTime).TotalSeconds -ge [double]$script:Config.nodeLogCooldownSeconds) {
             Write-Log "代理节点变化：$script:lastNode -> $($State.Node)"
+            $script:lastNodeLogTime = $now
         }
     } else {
         if ($script:lastUp) {
-            Write-Log '代理下线（连续失败达到阈值），已清空代理配置'
+            Write-Log '代理下线（连续失败达到时间窗），已清空代理配置'
         }
     }
     if ($envChanged) {
@@ -341,7 +418,11 @@ function Invoke-ApplyProxyState {
 
     $codexRunning = ($null -ne (Get-Process -Name 'codex' -ErrorAction SilentlyContinue))
     if ($State.Up) {
-        $message = "proxy up, port=$($State.Port), node=$($State.Node)"
+        if ($State.ApiOk -and $State.Health) {
+            $message = "proxy up, port=$($State.Port), node=$($State.Node)"
+        } else {
+            $message = "proxy holding (grace), health check failing"
+        }
     } else {
         $message = 'proxy down, cleared'
     }
@@ -369,28 +450,24 @@ if ($Test) {
     exit
 }
 
-try {
-Write-Log "守护脚本启动 (poll=$($script:Config.pollIntervalSeconds)s, threshold=$($script:Config.downThreshold))"
-
 $mutex = New-Object System.Threading.Mutex($false, 'CodexProxyDaemonMutex')
 if (-not $mutex.WaitOne(0)) {
-    Write-Log '已有实例在运行，本实例退出'
     exit
 }
-
 try {
-    $state = Get-DetectedState -UseThreshold
-    Invoke-ApplyProxyState -State $state
+    Write-Log "守护脚本启动 v2 (poll=$($script:Config.pollIntervalSeconds)s, downSeconds=$($script:Config.downSeconds)s, directDomains=$([string]::Join(',', @($script:Config.directDomains))))"
     while ($true) {
-        Start-Sleep -Seconds $script:Config.pollIntervalSeconds
-        $state = Get-DetectedState -UseThreshold
-        Invoke-ApplyProxyState -State $state
+        try {
+            $state = Get-DetectedState -UseGrace
+            Invoke-ApplyProxyState -State $state
+        } catch {
+            Write-Log "本轮检测异常（继续运行）: $($_.Exception.Message)"
+        }
+        Start-Sleep -Seconds ([int]$script:Config.pollIntervalSeconds)
     }
-} finally {
-    $mutex.ReleaseMutex()
-}} catch {
+} catch {
     $errMsg = $_.Exception.ToString()
-    Write-Log "未处理异常，守护进程崩溃: $errMsg"
+    Write-Log "未处理异常，守护进程退出: $errMsg"
     try {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
         [System.Windows.Forms.MessageBox]::Show(
@@ -402,5 +479,7 @@ try {
     } catch {
         Write-Log "崩溃弹窗失败: $($_.Exception.Message)"
     }
-    throw
+    exit 1
+} finally {
+    try { $mutex.ReleaseMutex() } catch {}
 }
