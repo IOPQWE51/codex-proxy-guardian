@@ -432,7 +432,7 @@ function Invoke-ApplyProxyState {
         }
     } else {
         if ($script:lastUp) {
-            Write-Log '代理下线（连续失败达到时间窗），已清空代理配置'
+            Write-Log '代理下线（检测失败），已清空代理配置'
         }
     }
     if ($envChanged) {

@@ -1,6 +1,6 @@
 ﻿// Codex 代理守护 - 托盘控制台（轻量 GUI）
 // 由 scripts\build-tray.ps1 编译，目标 .NET Framework 4.8（Win10/11 自带，无运行时依赖）。
-// 功能：状态查看、启停守护、开机自启开关、只读检测、日志/配置目录、安装/卸载。
+// 功能：状态查看、启停守护、开机自启开关、只读检测、节点切换、重启Codex、日志/配置目录、安装/卸载。
 
 using System;
 using System.Collections.Generic;
@@ -10,6 +10,7 @@ using System.IO;
 using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using System.Web.Script.Serialization;
 
 namespace CodexProxyGuardian
 {
@@ -62,6 +63,8 @@ namespace CodexProxyGuardian
         private readonly ToolStripMenuItem _miTrayAutoStart;
         private readonly ToolStripMenuItem _miInstall;
         private readonly ToolStripMenuItem _miUninstall;
+        private readonly ToolStripMenuItem _miNodes;
+        private readonly ToolStripMenuItem _miRestartCodex;
         private readonly System.Windows.Forms.Timer _timer;
         private readonly string _root;
         private readonly string _helper;
@@ -84,11 +87,16 @@ namespace CodexProxyGuardian
             _miTrayAutoStart.CheckOnClick = true;
             _miInstall = new ToolStripMenuItem("安装守护（注册自启任务）", null, (s, e) => InstallDaemon());
             _miUninstall = new ToolStripMenuItem("卸载守护任务", null, (s, e) => UninstallDaemon());
+            _miNodes = new ToolStripMenuItem("切换节点");
+            _miNodes.DropDownOpening += (s, e) => LoadNodes();
+            _miRestartCodex = new ToolStripMenuItem("重启 Codex 应用", null, (s, e) => RestartCodex());
 
             var menu = new ContextMenuStrip();
             menu.Items.Add("状态详情...", null, (s, e) => ShowStatus());
             menu.Items.Add("只读检测代理", null, (s, e) => RunDetect());
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(_miNodes);
+            menu.Items.Add(_miRestartCodex);
             menu.Items.Add(_miStartStop);
             menu.Items.Add(_miAutoStart);
             menu.Items.Add(_miTrayAutoStart);
@@ -402,6 +410,96 @@ namespace CodexProxyGuardian
             catch (Exception ex)
             {
                 MessageBox.Show("打开目录失败：" + ex.Message, "Codex 代理守护", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void LoadNodes()
+        {
+            string json = RunHelper("Nodes");
+            _miNodes.DropDownItems.Clear();
+            if (json.StartsWith("ERR=") || string.IsNullOrEmpty(json))
+            {
+                _miNodes.DropDownItems.Add(new ToolStripMenuItem("无法获取节点列表") { Enabled = false });
+                return;
+            }
+            try
+            {
+                var ser = new JavaScriptSerializer();
+                var dict = (Dictionary<string,object>)ser.DeserializeObject(json);
+                object groupsRaw;
+                if (!dict.TryGetValue("groups", out groupsRaw) || !(groupsRaw is object[])) return;
+                var groups = (object[])groupsRaw;
+                if (groups.Length == 0)
+                {
+                    _miNodes.DropDownItems.Add(new ToolStripMenuItem("无选择器组") { Enabled = false });
+                    return;
+                }
+                foreach (var g in groups)
+                {
+                    var gd = (Dictionary<string,object>)g;
+                    string name = (string)gd["name"];
+                    string now = (string)gd["now"];
+                    var opts = (object[])gd["options"];
+                    var groupItem = new ToolStripMenuItem(name);
+                    foreach (var o in opts)
+                    {
+                        string opt = (string)o;
+                        bool isCurrent = opt == now;
+                        var item = new ToolStripMenuItem(opt);
+                        if (isCurrent)
+                        {
+                            item.Checked = true;
+                            item.Font = new Font(SystemFonts.MenuFont, FontStyle.Bold);
+                        }
+                        string grp = name;
+                        string optv = opt;
+                        item.Click += (sender, ea) => SwitchNode(grp, optv);
+                        groupItem.DropDownItems.Add(item);
+                    }
+                    _miNodes.DropDownItems.Add(groupItem);
+                }
+            }
+            catch
+            {
+                _miNodes.DropDownItems.Add(new ToolStripMenuItem("JSON 解析失败") { Enabled = false });
+            }
+        }
+
+        private void SwitchNode(string group, string node)
+        {
+            string args = "SwitchNode " + QuoteArg(group) + " " + QuoteArg(node);
+            string result = RunHelper(args);
+            if (result.StartsWith("ERR="))
+            {
+                MessageBox.Show(result.Substring(4), "Codex 代理守护", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            else
+            {
+                RefreshState();
+                _icon.ShowBalloonTip(3000, "节点已切换", group + " → " + node, ToolTipIcon.Info);
+            }
+        }
+
+        private static string QuoteArg(string s)
+        {
+            if (s == null) return "\"\"";
+            return "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        }
+
+        private void RestartCodex()
+        {
+            var r = MessageBox.Show(
+                "Codex 正在运行中，重启将关闭当前窗口和对话。确定要重启吗？\n\n提示：如仅需应用代理配置，可重启后再建立对话。",
+                "Codex 代理守护", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (r != DialogResult.Yes) return;
+            string result = RunHelper("RestartCodex");
+            if (result.StartsWith("ERR="))
+            {
+                MessageBox.Show(result.Substring(4), "Codex 代理守护", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            else
+            {
+                _icon.ShowBalloonTip(3000, "Codex 代理守护", result, ToolTipIcon.Info);
             }
         }
 

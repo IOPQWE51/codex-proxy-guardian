@@ -73,9 +73,11 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 - 启动守护 / 停止守护
 - 暂停开机自启 / 恢复开机自启（不打断正在运行的守护）
 - 托盘开机自启（写入 HKCU Run）
+- **切换节点**：显示所有 Clash 选择器组及其节点列表，当前节点加粗标记，点击即可切换
+- **重启 Codex 应用**：确认后关闭并重启 Codex（仅在确认后执行，对话会断开）
 - 打开日志/配置目录；安装 / 卸载守护任务
 
-托盘每 15 秒刷新一次状态，代理上下线切换会弹出气泡通知。
+托盘每 15 秒刷新一次状态，代理上下线切换会弹出气泡通知。节点列表每次展开时通过 Clash API 实时查询，支持实时切换。
 
 ## 配置（config/daemon.config.json）
 

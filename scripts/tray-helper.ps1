@@ -2,32 +2,66 @@
 .SYNOPSIS
     Codex 代理守护 - 托盘控制台辅助脚本（由 GuardianTray.exe 调用）
 .DESCRIPTION
-    提供守护状态查询、启停、开机自启开关、安装/卸载、只读检测等操作。
-    输出为 UTF-8 的 key=value 扁平文本，便于 C# 托盘解析。
+    提供守护状态查询、启停、开机自启开关、安装/卸载、只读检测、
+    节点列表/切换、重启 Codex 等操作。UTF-8 输出。
 #>
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$Action)
+param(
+    [Parameter(Mandatory=$true)][string]$Action,
+    [string]$Group,
+    [string]$Node
+)
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $guardian = Join-Path $root 'scripts\codex-proxy-guardian.ps1'
+$cfgPath  = Join-Path $root 'config\daemon.config.json'
+
+function Invoke-ClashApiUtf8 {
+    param([string]$Method, [string]$Path, $Body)
+    $cfg = Get-Content -Raw -LiteralPath $cfgPath | ConvertFrom-Json
+    $base = [string]$cfg.clashApiUrl
+    $secret = [string]$cfg.clashApiSecret
+    $req = [System.Net.HttpWebRequest]::Create("$base$Path")
+    $req.Method = $Method
+    $req.Timeout = 8000
+    $req.Accept = 'application/json'
+    if ($secret -ne '') {
+        $req.Headers.Add('Authorization', ('Bearer ' + $secret))
+    }
+    if ($null -ne $Body) {
+        $req.ContentType = 'application/json'
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Compress))
+        $stream = $req.GetRequestStream()
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Dispose()
+    }
+    $resp = $req.GetResponse()
+    try {
+        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+        $json = $reader.ReadToEnd()
+        $reader.Dispose()
+    } finally { $resp.Close() }
+    if ($Method -eq 'PUT') { return $null }
+    if ($json -and $json.Trim().Length -gt 0) { return ($json | ConvertFrom-Json) }
+    return $null
+}
 
 switch ($Action) {
     'State' {
         $t = Get-ScheduledTask -TaskName 'CodexProxyDaemon' -ErrorAction SilentlyContinue
         if ($t) { "task=$($t.State)" } else { 'task=NotInstalled' }
-        $sf = Join-Path $root 'state.json'
         try {
-            $s = Get-Content -Raw -LiteralPath $sf | ConvertFrom-Json
+            $s = Get-Content -Raw -LiteralPath (Join-Path $root 'state.json') | ConvertFrom-Json
             "proxyUp=$($s.proxyUp)"
             "port=$($s.port)"
             "node=$($s.node)"
             "mode=$($s.mode)"
-"message=$($s.message)"
-            "version=$($s.version)"
+            "message=$($s.message)"
             "nextCheck=$($s.nextCheck)"
+            "version=$($s.version)"
         } catch {
             'proxyUp='
             'port='
@@ -35,46 +69,83 @@ switch ($Action) {
             'mode='
             'message=state.json 读取失败'
             'nextCheck='
+            'version='
         }
         foreach ($v in 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY') {
             $val = [Environment]::GetEnvironmentVariable($v, 'User')
             if ($null -eq $val) { $val = '' }
             "env$v=$val"
         }
-        $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
         try {
-            $p = Get-ItemProperty -Path $k
+            $p = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
             "sysProxy=Enable=$($p.ProxyEnable)|Server=$($p.ProxyServer)"
         } catch {
             'sysProxy=Enable=0|Server='
         }
     }
-    'Start' {
-        Start-ScheduledTask -TaskName 'CodexProxyDaemon'
-        'started'
+    'Start'    { Start-ScheduledTask -TaskName 'CodexProxyDaemon'; 'started' }
+    'Stop'     { Stop-ScheduledTask  -TaskName 'CodexProxyDaemon'; 'stopped' }
+    'Enable'   { Enable-ScheduledTask  -TaskName 'CodexProxyDaemon'; 'enabled' }
+    'Disable'  { Disable-ScheduledTask -TaskName 'CodexProxyDaemon'; 'disabled' }
+    'Detect'   { & $guardian -Test -DryRun }
+    'Install'  { & (Join-Path $root 'scripts\install-daemon.ps1') -Force }
+    'Uninstall'{ & (Join-Path $root 'scripts\uninstall-daemon.ps1') }
+
+    'Nodes' {
+        try {
+            $proxies = Invoke-ClashApiUtf8 -Method 'GET' -Path '/proxies'
+            $groups = @()
+            foreach ($name in ($proxies.proxies.PSObject.Properties.Name)) {
+                $item = $proxies.proxies.$name
+                if ($null -ne $item.now) {
+                    $optArray = @()
+                    foreach ($o in $item.all) { $optArray += [string]$o }
+                    $groups += [PSCustomObject]@{ name = $name; now = [string]$item.now; options = $optArray }
+                }
+            }
+            [PSCustomObject]@{ groups = $groups } | ConvertTo-Json -Depth 5 -Compress
+        } catch {
+            "ERR=$($_.Exception.Message)"
+        }
     }
-    'Stop' {
-        Stop-ScheduledTask -TaskName 'CodexProxyDaemon'
-        'stopped'
+
+    'SwitchNode' {
+        if ([string]::IsNullOrEmpty($Group) -or [string]::IsNullOrEmpty($Node)) {
+            throw 'SwitchNode 需要 Group 和 Node 参数'
+        }
+        $path = '/proxies/' + [uri]::EscapeDataString($Group)
+        try {
+            Invoke-ClashApiUtf8 -Method 'PUT' -Path $path -Body @{ name = $Node } | Out-Null
+            ('switched group=' + $Group + ' node=' + $Node)
+        } catch {
+            "ERR=$($_.Exception.Message)"
+        }
     }
-    'Enable' {
-        Enable-ScheduledTask -TaskName 'CodexProxyDaemon'
-        'enabled'
+
+    'RestartCodex' {
+        $procs = @(Get-Process -Name 'codex' -ErrorAction SilentlyContinue)
+        $exePaths = @($procs | ForEach-Object { $_.Path } | Where-Object { $_ -ne '' } | Select-Object -Unique)
+        foreach ($pr in $procs) {
+            try { $pr.CloseMainWindow() | Out-Null } catch {}
+        }
+        Start-Sleep -Seconds 2
+        foreach ($pr in @(Get-Process -Name 'codex' -ErrorAction SilentlyContinue)) {
+            try { Stop-Process -Id $pr.Id -Force } catch {}
+        }
+        Start-Sleep -Milliseconds 500
+        $started = 0
+        foreach ($exe in $exePaths) {
+            if (-not [string]::IsNullOrEmpty($exe) -and (Test-Path -LiteralPath $exe)) {
+                Start-Process -FilePath $exe
+                $started++
+            }
+        }
+        if ($started -eq 0) {
+            $cmd = Get-Command codex -ErrorAction SilentlyContinue
+            if ($cmd) { Start-Process -FilePath $cmd.Source; $started++ }
+        }
+        "codex restarted ($started processes)"
     }
-    'Disable' {
-        Disable-ScheduledTask -TaskName 'CodexProxyDaemon'
-        'disabled'
-    }
-    'Detect' {
-        & $guardian -Test -DryRun
-    }
-    'Install' {
-        & (Join-Path $root 'scripts\install-daemon.ps1') -Force
-    }
-    'Uninstall' {
-        & (Join-Path $root 'scripts\uninstall-daemon.ps1')
-    }
-    default {
-        throw "未知操作: $Action"
-    }
+
+    default { throw "未知操作: $Action" }
 }

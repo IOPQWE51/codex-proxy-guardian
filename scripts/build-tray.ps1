@@ -38,7 +38,7 @@ if ((Test-Path -LiteralPath $out) -and -not $Force) {
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-& $csc /nologo /target:winexe /utf8output /out:"$out" /r:System.Windows.Forms.dll /r:System.Drawing.dll "$src"
+& $csc /nologo /target:winexe /utf8output /out:"$out" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "$src"
 if ($LASTEXITCODE -ne 0) { throw "编译失败，退出码 $LASTEXITCODE" }
 
 "编译完成: $out"
