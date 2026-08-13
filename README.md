@@ -15,6 +15,9 @@
 - **单轮容错**：单轮检测异常只记录继续运行，不退出守护。
 - **静默常驻**：计划任务登录自启、隐藏窗口；崩溃时弹窗提示并写日志。
 - **托盘控制台**：`GuardianTray.exe`（约 15 KB，.NET Framework 4.8 免安装运行时）。
+- **配置热重载**：修改 `config\daemon.config.json` 后无需重启守护，下次检测自动生效并记录日志。
+- **崩溃自动重启**：计划任务启用 RestartCount（最多 3 次 / 1 分钟内），守护意外退出后自动恢复。
+- **多 URL 探活**：支持多个探活 URL，任一成功即判定在线，降低单点故障导致的误判。
 - **多实例互斥**：守护与托盘均有互斥锁，不会重复运行。
 
 ## 目录结构
@@ -88,7 +91,8 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 | `pollIntervalSeconds` | `35` | 轮询间隔（钳制 5–600） |
 | `requestTimeoutSeconds` | `8` | API / 探活超时（钳制 2–30） |
 | `downSeconds` | `90` | 连续失败判定下线的秒数（钳制 15–600） |
-| `proxyTestUrl` | gstatic generate_204 | 代理出口探活地址 |
+| `proxyTestUrl` | gstatic generate_204 | 单个探活地址（兼容旧配置） |
+| `proxyTestUrls` | 3 条 URL | 探活 URL 数组，任一成功即判定在线；降低单点被墙导致的误判 |
 | `noProxy` / `proxyOverride` | 本机/内网默认 | 基线绕过列表，`directDomains` 会自动并入 |
 | `directDomains` | 8 家境内 API | 直连白名单（逗号分隔，`*.deepseek.com` 等） |
 | `nodeLogCooldownSeconds` | `60` | 节点切换日志节流 |

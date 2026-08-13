@@ -12,7 +12,7 @@ if (-not (Test-Path -LiteralPath $main)) {
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$main`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Description 'Codex 代理守护：检测 FlClash 并维护 Codex 代理配置'
 Register-ScheduledTask -TaskName 'CodexProxyDaemon' -InputObject $task -Force | Out-Null
 

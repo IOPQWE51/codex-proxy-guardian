@@ -29,7 +29,7 @@ function Assert-True {
 
 # ---- 提取守护脚本中的函数（隔离运行，不执行入口） ----
 $src = Get-Content -Raw -LiteralPath $guardian
-foreach ($fn in @('Clamp-Int', 'Merge-OverrideList', 'Get-DaemonConfig', 'Get-DetectedState', 'Write-Log')) {
+foreach ($fn in @('Clamp-Int', 'Merge-OverrideList', 'Get-DaemonConfig', 'Get-DetectedState', 'Write-Log', 'Reload-ConfigIfChanged', 'Test-ProxyHealth')) {
     $m = [regex]::Match($src, "(?ms)^function $fn \{.*?^}")
     if (-not $m.Success) { throw "未找到函数 $fn（守护脚本结构可能已变化）" }
     Invoke-Expression $m.Value
@@ -171,6 +171,58 @@ try {
     if (Test-Path -LiteralPath $tmpDir3) { Remove-Item -LiteralPath $tmpDir3 -Recurse -Force }
 }
 
+"=== 7. Reload-ConfigIfChanged（配置热重载） ==="
+$tmpDir4 = Join-Path $env:TEMP ('cpd-reload-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tmpDir4 -Force | Out-Null
+try {
+    $cfgPath4 = Join-Path $tmpDir4 'daemon.config.json'
+    $script:ConfigPath = $cfgPath4
+    $script:LogDir = Join-Path $tmpDir4 'logs'
+    $script:DefaultLogFile = Join-Path $script:LogDir 'daemon.log'
+    $script:configLastWrite = [datetime]::MinValue
+    [IO.File]::WriteAllText($cfgPath4, (@{ clashApiUrl = 'http://127.0.0.1:9191' } | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($true)))
+    $script:Config = Get-DaemonConfig
+    Assert-True ($script:Config.clashApiUrl -eq 'http://127.0.0.1:9191') '首次加载配置生效'
+    Assert-True (-not (Reload-ConfigIfChanged)) '配置未变更时不重载'
+    Start-Sleep -Milliseconds 1100
+    [IO.File]::WriteAllText($cfgPath4, (@{ clashApiUrl = 'http://127.0.0.1:9292' } | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($true)))
+    Assert-True (Reload-ConfigIfChanged) '配置变更触发重载'
+    Assert-True ($script:Config.clashApiUrl -eq 'http://127.0.0.1:9292') '重载后新值生效'
+} finally {
+    if (Test-Path -LiteralPath $tmpDir4) { Remove-Item -LiteralPath $tmpDir4 -Recurse -Force }
+}
+
+"=== 8. Test-ProxyHealth 多 URL 兜底 ==="
+# 第 4 节定义了同名桩函数，这里重新提取真实函数覆盖桩
+$m8 = [regex]::Match((Get-Content -Raw -LiteralPath $guardian), '(?ms)^function Test-ProxyHealth \{.*?^}')
+if (-not $m8.Success) { throw 'Test-ProxyHealth 提取失败' }
+Invoke-Expression $m8.Value
+$script:Config = @{
+    proxyTestUrls = @('http://url-a', 'http://url-b', 'http://url-c')
+    proxyTestUrl  = ''
+    requestTimeoutSeconds = 8
+}
+$script:reqCount = 0
+$script:failFirst = 0
+function Invoke-WebRequest {
+    param([string]$Uri, [string]$Proxy, [int]$TimeoutSec, [switch]$UseBasicParsing)
+    $script:reqCount++
+    if ($script:reqCount -le $script:failFirst) { throw 'simulated network failure' }
+    return [PSCustomObject]@{ StatusCode = 204 }
+}
+$script:reqCount = 0
+$script:failFirst = 1
+$h1 = Test-ProxyHealth -Port 7890
+Assert-True ($h1) '第一个 URL 失败、第二个成功 -> 在线'
+Assert-True ($script:reqCount -eq 2) "实际尝试次数 -> $($script:reqCount)"
+$script:reqCount = 0
+$script:failFirst = 5
+$h2 = Test-ProxyHealth -Port 7890
+Assert-True (-not $h2) '全部 URL 失败 -> 离线'
+Assert-True ($script:reqCount -eq 3) "尝试完所有 URL -> $($script:reqCount)"
+$script:reqCount = 0
+$h3 = Test-ProxyHealth -Port 0
+Assert-True (-not $h3 -and $script:reqCount -eq 0) '端口无效直接离线且不请求'
 ""
 "结果: PASS=$($script:pass) FAIL=$($script:fail)"
 if ($script:fail -gt 0) { exit 1 }

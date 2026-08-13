@@ -42,7 +42,8 @@ $script:failCount   = 0
 $script:firstFailAt = [datetime]::MinValue
 $script:lastUp      = $true
 $script:seenUp        = $false
-$script:DaemonVersion = '2.1.0'
+$script:DaemonVersion = '2.2.0'
+$script:configLastWrite = [datetime]::MinValue
 $script:lastPort    = 0
 $script:lastNode    = ''
 $script:lastNodeLogTime = [datetime]::MinValue
@@ -58,6 +59,7 @@ $script:DefaultConfig = @{
     downThreshold         = 3
     downSeconds           = 90
     proxyTestUrl          = 'https://www.gstatic.com/generate_204'
+    proxyTestUrls         = @('https://www.gstatic.com/generate_204', 'https://cp.cloudflare.com/generate_204', 'https://www.google.com/generate_204')
     noProxy               = 'localhost,127.*,10.*,192.168.*,*.local'
     proxyOverride         = 'localhost;*.local;127.*;10.*;192.168.*'
     directDomains         = @('*.deepseek.com')
@@ -154,6 +156,21 @@ function Get-DaemonConfig {
     $cfg['nodeLogCooldownSeconds'] = Clamp-Int $cfg['nodeLogCooldownSeconds'] 5 3600
     $cfg['maxLogBytes']            = Clamp-Int $cfg['maxLogBytes'] 102400 10485760
     $cfg['maxLogFiles']            = Clamp-Int $cfg['maxLogFiles'] 1 10
+    # proxyTestUrls 统一为数组
+    $urls = @()
+    foreach ($u in @($cfg['proxyTestUrls'])) {
+        $us = [string]$u
+        if ($us.Trim() -ne '' -and $urls -notcontains $us.Trim()) { $urls += $us.Trim() }
+    }
+    if ($urls.Count -eq 0) {
+        $single = [string]$cfg['proxyTestUrl']
+        if ($single.Trim() -ne '') { $urls += $single.Trim() }
+    }
+    $cfg['proxyTestUrls'] = $urls
+    # 记录配置文件的修改时间，供热重载比较
+    if (Test-Path -LiteralPath $script:ConfigPath) {
+        $script:configLastWrite = (Get-Item -LiteralPath $script:ConfigPath).LastWriteTime
+    }
 
     # 合并 directDomains 到 NO_PROXY / ProxyOverride
     $rawDirect = $cfg['directDomains']
@@ -181,6 +198,18 @@ function Get-DaemonConfig {
     return $cfg
 }
 
+function Reload-ConfigIfChanged {
+    # 配置文件 mtime 变化则热重载，无需重启守护
+    if (Test-Path -LiteralPath $script:ConfigPath) {
+        $t = (Get-Item -LiteralPath $script:ConfigPath).LastWriteTime
+        if ($t -gt $script:configLastWrite) {
+            $script:Config = Get-DaemonConfig
+            Write-Log "配置已热重载 (poll=$($script:Config.pollIntervalSeconds)s, downSeconds=$($script:Config.downSeconds)s, urls=$($script:Config.proxyTestUrls.Count))"
+            return $true
+        }
+    }
+    return $false
+}
 function Invoke-ClashApi {
     param([string]$Path)
     $uri = "$($script:Config.clashApiUrl)$Path"
@@ -209,13 +238,21 @@ function Invoke-ClashApi {
 function Test-ProxyHealth {
     param([int]$Port)
     if ($Port -le 0) { return $false }
-    try {
-        $r = Invoke-WebRequest -Uri $script:Config.proxyTestUrl -Proxy "http://127.0.0.1:$Port" -TimeoutSec ([int]$script:Config.requestTimeoutSeconds) -UseBasicParsing
-        # 任何真实 HTTP 响应（含 4xx）都说明隧道可用；仅网络异常判失败
-        return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500)
-    } catch {
-        return $false
+    # 任一探活 URL 成功即判定隧道可用，降低单点 URL 被墙/抽风导致的误判
+    $urls = @($script:Config.proxyTestUrls)
+    if ($urls.Count -eq 0) {
+        $single = [string]$script:Config.proxyTestUrl
+        if ($single -ne '') { $urls = @($single) }
     }
+    foreach ($u in $urls) {
+        try {
+            $r = Invoke-WebRequest -Uri ([string]$u) -Proxy "http://127.0.0.1:$Port" -TimeoutSec ([int]$script:Config.requestTimeoutSeconds) -UseBasicParsing
+            if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { return $true }
+        } catch {
+            # 尝试下一个 URL
+        }
+    }
+    return $false
 }
 
 function Get-DetectedState {
@@ -492,6 +529,7 @@ try {
     Write-Log "守护脚本启动 v$($script:DaemonVersion) (poll=$($script:Config.pollIntervalSeconds)s, downSeconds=$($script:Config.downSeconds)s, directDomains=$([string]::Join(',', @($script:Config.directDomains))))"
     while ($true) {
         try {
+            Reload-ConfigIfChanged | Out-Null
             $state = Get-DetectedState -UseGrace
             Invoke-ApplyProxyState -State $state
         } catch {
