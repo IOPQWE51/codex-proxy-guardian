@@ -26,8 +26,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$script:Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$script:ConfigPath = Join-Path $script:Root 'daemon.config.json'
+$script:ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$script:Root = Split-Path -Parent $script:ScriptDir
+$script:ConfigPath = Join-Path (Join-Path $script:Root 'config') 'daemon.config.json'
 $script:StatePath = Join-Path $script:Root 'state.json'
 $script:LogDir = Join-Path $script:Root 'logs'
 $script:Config = $null
@@ -42,8 +43,8 @@ $script:DefaultConfig = @{
     requestTimeoutSeconds = 8
     downThreshold       = 3
     proxyTestUrl        = 'https://www.gstatic.com/generate_204'
-    noProxy             = 'localhost,127.*,10.*,192.168.*,*.local'
-    proxyOverride       = 'localhost;*.local;127.*;10.*;192.168.*'
+    noProxy             = 'localhost,127.*,10.*,192.168.*,*.local,*.deepseek.com'
+    proxyOverride       = 'localhost;*.local;127.*;10.*;192.168.*;*.deepseek.com'
     maxLogBytes         = 2097152
     maxLogFiles         = 3
 }

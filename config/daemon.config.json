@@ -4,8 +4,8 @@
   "requestTimeoutSeconds": 8,
   "downThreshold": 3,
   "proxyTestUrl": "https://www.gstatic.com/generate_204",
-  "noProxy": "localhost,127.*,10.*,192.168.*,*.local",
-  "proxyOverride": "localhost;*.local;127.*;10.*;192.168.*",
+  "noProxy": "localhost,127.*,10.*,192.168.*,*.local,*.deepseek.com",
+  "proxyOverride": "localhost;*.local;127.*;10.*;192.168.*;*.deepseek.com",
   "maxLogBytes": 2097152,
   "maxLogFiles": 3
 }
