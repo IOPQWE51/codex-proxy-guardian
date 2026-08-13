@@ -21,7 +21,11 @@
     "*.bigmodel.cn",
     "*.siliconflow.cn",
     "*.minimaxi.com",
-    "*.api.volces.com"
+    "*.api.volces.com",
+    "*.xfyun.cn",
+    "*.stepfun.com",
+    "*.lingyiwanwu.com",
+    "*.baichuan-ai.com"
   ],
   "nodeLogCooldownSeconds": 60,
   "maxLogBytes": 2097152,

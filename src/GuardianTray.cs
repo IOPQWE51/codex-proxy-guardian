@@ -10,6 +10,8 @@ using System.IO;
 using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Web.Script.Serialization;
 
 namespace CodexProxyGuardian
@@ -74,12 +76,19 @@ namespace CodexProxyGuardian
         private Dictionary<string, string> _state = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private string _lastProxyUp = "";
 
+        [DllImport("user32.dll")]
+        private static extern bool DestroyIcon(IntPtr handle);
+
         public TrayApp()
         {
             _root = FindRoot();
             _helper = _root == null ? null : Path.Combine(_root, "scripts", "tray-helper.ps1");
             _logDir = _root == null ? null : Path.Combine(_root, "logs");
             _configDir = _root == null ? null : Path.Combine(_root, "config");
+
+            var miHeader = new ToolStripMenuItem("Codex 代理守护");
+            miHeader.Enabled = false;
+            miHeader.Font = new Font(SystemFonts.MenuFont, FontStyle.Bold);
 
             _miStartStop = new ToolStripMenuItem("启动守护", null, (s, e) => ToggleDaemon());
             _miAutoStart = new ToolStripMenuItem("暂停开机自启", null, (s, e) => ToggleTaskAutoStart());
@@ -92,8 +101,10 @@ namespace CodexProxyGuardian
             _miRestartCodex = new ToolStripMenuItem("重启 Codex 应用", null, (s, e) => RestartCodex());
 
             var menu = new ContextMenuStrip();
-            menu.Items.Add("状态详情...", null, (s, e) => ShowStatus());
-            menu.Items.Add("只读检测代理", null, (s, e) => RunDetect());
+            menu.Items.Add(miHeader);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("状态详情", null, (s, e) => ShowStatus());
+            menu.Items.Add("只读检测", null, (s, e) => RunDetect());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_miNodes);
             menu.Items.Add(_miRestartCodex);
@@ -112,7 +123,7 @@ namespace CodexProxyGuardian
             menu.Opening += (s, e) => RefreshState();
 
             _icon = new NotifyIcon();
-            _icon.Icon = SystemIcons.Application;
+            _icon.Icon = MakeIcon(Color.FromArgb(150, 150, 150));
             _icon.Visible = true;
             _icon.ContextMenuStrip = menu;
             _icon.Text = "Codex 代理守护";
@@ -225,6 +236,9 @@ namespace CodexProxyGuardian
             _miStartStop.Text = task == "Running" ? "停止守护" : "启动守护";
             _miAutoStart.Text = task == "Disabled" ? "恢复开机自启" : "暂停开机自启";
             _miInstall.Visible = task == "NotInstalled";
+            Icon prevIcon = _icon.Icon;
+            _icon.Icon = MakeIcon(StatusColor());
+            if (prevIcon != null) { prevIcon.Dispose(); }
             _miUninstall.Visible = task != "NotInstalled";
             _miTrayAutoStart.Checked = IsTrayAutoStart();
         }
@@ -244,46 +258,139 @@ namespace CodexProxyGuardian
         private void ShowStatus()
         {
             RefreshState();
-            var sb = new StringBuilder();
-            sb.AppendLine("守护任务: " + TaskLabel(Get(_state, "task", "Unknown")));
-            sb.AppendLine("版本: " + Get(_state, "version", "-"));
-            string up = Get(_state, "proxyUp", "");
-            if (up == "True")
+            using (var f = new Form())
             {
-                sb.AppendLine("代理状态: 在线（端口 " + Get(_state, "port", "?") + "）");
+                f.Text = "代理守护 · 状态";
+                f.StartPosition = FormStartPosition.CenterScreen;
+                f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                f.MaximizeBox = false;
+                f.MinimizeBox = false;
+                f.ShowInTaskbar = false;
+                f.Width = 560;
+
+                var layout = new TableLayoutPanel();
+                layout.Dock = DockStyle.Fill;
+                layout.ColumnCount = 2;
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                layout.Padding = new Padding(18, 14, 18, 4);
+                layout.AutoScroll = true;
+
+                string up = Get(_state, "proxyUp", "");
+                string headText;
+                Color headColor;
+                if (up == "True") { headText = "代理在线 · 端口 " + Get(_state, "port", "?"); headColor = Color.FromArgb(34, 160, 95); }
+                else if (up == "False") { headText = "代理已关闭 · 直连模式"; headColor = Color.FromArgb(216, 80, 80); }
+                else { headText = "状态未知"; headColor = Color.FromArgb(130, 130, 130); }
+
+                var head = new Label();
+                head.Text = headText;
+                head.Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
+                head.ForeColor = headColor;
+                head.AutoSize = true;
+                head.Margin = new Padding(0, 2, 0, 14);
+                layout.Controls.Add(head, 0, 0);
+                layout.SetColumnSpan(head, 2);
+
+                int row = 1;
+                AddRow(layout, ref row, "守护任务", TaskLabel(Get(_state, "task", "Unknown")));
+                AddRow(layout, ref row, "版本", Get(_state, "version", "-"));
+                AddRow(layout, ref row, "节点", Get(_state, "node", "-"));
+                AddRow(layout, ref row, "模式", Get(_state, "mode", "-"));
+                AddRow(layout, ref row, "下次检测", Get(_state, "nextCheck", "-"));
+                AddRow(layout, ref row, "消息", Get(_state, "message", "-"));
+                AddRow(layout, ref row, "HTTP_PROXY", EnvOrDash("HTTP_PROXY"));
+                AddRow(layout, ref row, "HTTPS_PROXY", EnvOrDash("HTTPS_PROXY"));
+                AddRow(layout, ref row, "ALL_PROXY", EnvOrDash("ALL_PROXY"));
+                AddRow(layout, ref row, "NO_PROXY", EnvOrDash("NO_PROXY"));
+                AddRow(layout, ref row, "系统代理", Get(_state, "sysProxy", "-"));
+                if (_root == null)
+                {
+                    AddRow(layout, ref row, "警告", "未找到守护目录，请设置 CODEX_PROXY_GUARDIAN_HOME");
+                }
+
+                var ok = new Button();
+                ok.Text = "关闭";
+                ok.Width = 88;
+                ok.DialogResult = DialogResult.Cancel;
+                ok.Anchor = AnchorStyles.Right;
+                ok.Margin = new Padding(0, 10, 0, 6);
+                ok.Click += (s, e) => f.Close();
+                layout.Controls.Add(ok, 1, row);
+
+                f.Controls.Add(layout);
+                int height = 150 + row * 34;
+                f.Height = Math.Min(580, Math.Max(340, height));
+                f.ShowDialog();
             }
-            else if (up == "False")
-            {
-                sb.AppendLine("代理状态: 已关闭（直连模式）");
-            }
-            else
-            {
-                sb.AppendLine("代理状态: 未知");
-            }
-            sb.AppendLine("节点: " + Get(_state, "node", "-"));
-            sb.AppendLine("模式: " + Get(_state, "mode", "-"));
-            sb.AppendLine("消息: " + Get(_state, "message", "-"));
-            sb.AppendLine("下次检测: " + Get(_state, "nextCheck", "-"));
-            sb.AppendLine();
-            sb.AppendLine("用户环境变量:");
-            AppendEnv(sb, "HTTP_PROXY");
-            AppendEnv(sb, "HTTPS_PROXY");
-            AppendEnv(sb, "ALL_PROXY");
-            AppendEnv(sb, "NO_PROXY");
-            sb.AppendLine();
-            sb.AppendLine("系统代理: " + Get(_state, "sysProxy", "-"));
-            if (_root == null)
-            {
-                sb.AppendLine();
-                sb.AppendLine("警告: 未找到守护目录，请设置 CODEX_PROXY_GUARDIAN_HOME。");
-            }
-            MessageBox.Show(sb.ToString(), "Codex 代理守护 - 状态", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        private void AppendEnv(StringBuilder sb, string name)
+        private static void AddRow(TableLayoutPanel layout, ref int row, string name, string value)
+        {
+            var lbl = new Label();
+            lbl.Text = name;
+            lbl.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
+            lbl.ForeColor = Color.FromArgb(105, 105, 105);
+            lbl.AutoSize = true;
+            lbl.Anchor = AnchorStyles.Left;
+            lbl.Margin = new Padding(0, 3, 8, 3);
+            layout.Controls.Add(lbl, 0, row);
+
+            var val = new Label();
+            val.Text = value;
+            val.Font = new Font("Microsoft YaHei UI", 9F);
+            val.ForeColor = Color.FromArgb(35, 35, 35);
+            val.AutoSize = true;
+            val.MaximumSize = new Size(350, 0);
+            val.Anchor = AnchorStyles.Left;
+            val.Margin = new Padding(0, 3, 8, 3);
+            layout.Controls.Add(val, 1, row);
+            row++;
+        }
+
+        private string EnvOrDash(string name)
         {
             string v = Get(_state, "env" + name, "");
-            sb.AppendLine(name + "=" + (v.Length > 0 ? v : "(未设置)"));
+            return v.Length > 0 ? v : "(未设置)";
+        }
+
+        private Color StatusColor()
+        {
+            string task = Get(_state, "task", "");
+            if (task == "NotInstalled") { return Color.FromArgb(150, 150, 150); }
+            string up = Get(_state, "proxyUp", "");
+            if (up == "True") { return Color.FromArgb(34, 160, 95); }
+            if (up == "False") { return Color.FromArgb(216, 80, 80); }
+            return Color.FromArgb(150, 150, 150);
+        }
+
+        private static Icon MakeIcon(Color color)
+        {
+            var bmp = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.Transparent);
+                using (var brush = new SolidBrush(color))
+                {
+                    g.FillEllipse(brush, 1, 1, 14, 14);
+                }
+                using (var ring = new Pen(Color.White, 1.0F))
+                {
+                    g.DrawEllipse(ring, 2.5F, 2.5F, 11, 11);
+                }
+                using (var f = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var tf = new SolidBrush(Color.White))
+                {
+                    SizeF size = g.MeasureString("P", f);
+                    g.DrawString("P", f, tf, (16 - size.Width) / 2F, (16 - size.Height) / 2F - 1F);
+                }
+            }
+            IntPtr hIcon = bmp.GetHicon();
+            Icon icon = (Icon)Icon.FromHandle(hIcon).Clone();
+            DestroyIcon(hIcon);
+            bmp.Dispose();
+            return icon;
         }
 
         private void RunDetect()

@@ -2,7 +2,7 @@
 
 检测 FlClash 并维护 Codex 的本地代理配置：FlClash 在线时写入用户级代理环境变量
 （`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`）与 WinINET 系统代理；
-下线时自动清空，让 DeepSeek、通义、Moonshot 等境内官方 API 直连不绕代理。
+下线时自动清空，让 DeepSeek、通义、Moonshot、讯飞星火、阶跃星辰、零一万物、百川等境内官方 API 直连不绕代理。
 带托盘图形控制台，可查看状态、启停守护、管理开机自启。
 
 ## 特性
@@ -14,7 +14,7 @@
 - **日志防写爆**：单文件上限 + 自动轮转（默认 2 MB × 3 份），日志写入连续失败时自动静默降级。
 - **单轮容错**：单轮检测异常只记录继续运行，不退出守护。
 - **静默常驻**：计划任务登录自启、隐藏窗口；崩溃时弹窗提示并写日志。
-- **托盘控制台**：`GuardianTray.exe`（约 15 KB，.NET Framework 4.8 免安装运行时）。
+- **托盘控制台**：GuardianTray.exe（约 22 KB，.NET Framework 4.8 免安装运行时），动态图标（绿色=在线、红色=离线、灰色=未安装），简约菜单，Form 对话框状态详情。
 - **配置热重载**：修改 `config\daemon.config.json` 后无需重启守护，下次检测自动生效并记录日志。
 - **崩溃自动重启**：计划任务启用 RestartCount（最多 3 次 / 1 分钟内），守护意外退出后自动恢复。
 - **多 URL 探活**：支持多个探活 URL，任一成功即判定在线，降低单点故障导致的误判。
@@ -80,9 +80,9 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 
 ### 托盘控制台
 
-右键托盘图标：
+右键托盘图标（绿色圆点=在线、红色=离线、灰色=未安装）：
 
-- 状态详情：任务状态、代理在线/节点/端口、环境变量、系统代理
+- 状态详情（Form 对话框）：任务状态、代理在线/节点/端口、环境变量、系统代理
 - 只读检测代理：手动跑一次检测，不改配置
 - 启动守护 / 停止守护
 - 暂停开机自启 / 恢复开机自启（不打断正在运行的守护）
@@ -107,7 +107,7 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 | `proxyTestUrl` | gstatic generate_204 | 单个探活地址（兼容旧配置） |
 | `proxyTestUrls` | 3 条 URL | 探活 URL 数组，任一成功即判定在线；降低单点被墙导致的误判 |
 | `noProxy` / `proxyOverride` | 本机/内网默认 | 基线绕过列表，`directDomains` 会自动并入 |
-| `directDomains` | 8 家境内 API | 直连白名单（逗号分隔，`*.deepseek.com` 等） |
+| `directDomains` | 12 家境内 API | 直连白名单（逗号分隔），覆盖 DeepSeek、通义、Moonshot、讯飞星火、阶跃星辰、零一万物、百川等 |
 | `nodeLogCooldownSeconds` | `60` | 节点切换日志节流 |
 | `maxLogBytes` / `maxLogFiles` | 2 MB / 3 | 日志上限与轮转份数 |
 

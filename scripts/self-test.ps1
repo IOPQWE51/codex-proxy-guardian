@@ -75,7 +75,7 @@ try {
         proxyTestUrl = 'https://www.gstatic.com/generate_204'
         noProxy = 'localhost,127.*,10.*,192.168.*,*.local'
         proxyOverride = 'localhost;*.local;127.*;10.*;192.168.*'
-        directDomains = @('*.deepseek.com')
+        directDomains = @('*.deepseek.com', '*.qwen.ai', '*.dashscope.aliyuncs.com', '*.moonshot.cn', '*.bigmodel.cn', '*.siliconflow.cn', '*.minimaxi.com', '*.api.volces.com', '*.xfyun.cn', '*.stepfun.com', '*.lingyiwanwu.com', '*.baichuan-ai.com')
         nodeLogCooldownSeconds = 60
         maxLogBytes = 2097152
         maxLogFiles = 3
