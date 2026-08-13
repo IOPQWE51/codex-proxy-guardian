@@ -1,4 +1,4 @@
-# Install
+﻿# Install
 
 ## Prerequisites
 
@@ -39,3 +39,11 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 
 - The scheduled task runs at logon and starts hidden.
 - Restart Codex after first install if you want it to use the proxy immediately.
+## Optional: Tray console
+
+```powershell
+.\dist\GuardianTray.exe
+```
+
+Provides status, start/stop, autostart toggles, log/config folders, and install/uninstall.
+The tray autostart toggle registers itself under HKCU Run.

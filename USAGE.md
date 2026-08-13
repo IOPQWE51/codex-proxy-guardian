@@ -1,4 +1,4 @@
-# Usage
+﻿# Usage
 
 ## Commands
 
@@ -26,3 +26,9 @@
 ```powershell
 .\scripts\uninstall-daemon.ps1 -ClearEnv -DisableSystemProxy
 ```
+## Tray console
+
+`dist\GuardianTray.exe` provides a system-tray UI: status details (task, proxy up/down, node,
+env vars, system proxy), read-only detect, start/stop daemon, pause/resume logon autostart,
+tray autostart, log/config folders, install/uninstall. It refreshes every 15 s and shows a
+balloon when the proxy state flips.
