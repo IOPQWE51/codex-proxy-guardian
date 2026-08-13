@@ -14,6 +14,15 @@ if ($task) {
     '计划任务 CodexProxyDaemon 不存在'
 }
 
+# Unregister 不会结束仍在运行的守护进程，这里显式停止，避免孤儿进程继续改代理
+$daemonProcs = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -match 'codex-proxy-guardian\.ps1' }
+$stopped = 0
+foreach ($proc in $daemonProcs) {
+    try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop; $stopped++ } catch { }
+}
+if ($stopped -gt 0) { "已停止守护进程（$stopped 个）" }
+
 if ($ClearEnv) {
     foreach ($v in @('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')) {
         [Environment]::SetEnvironmentVariable($v, $null, 'User')

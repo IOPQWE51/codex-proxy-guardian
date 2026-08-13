@@ -103,7 +103,9 @@ namespace CodexProxyGuardian
             menu.Items.Add(_miInstall);
             menu.Items.Add(_miUninstall);
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("查看日志", null, (s, e) => ViewLog());
             menu.Items.Add("打开日志目录", null, (s, e) => OpenFolder(_logDir));
+            menu.Items.Add("编辑配置", null, (s, e) => EditConfig());
             menu.Items.Add("打开配置目录", null, (s, e) => OpenFolder(_configDir));
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出", null, (s, e) => ExitApp());
@@ -500,6 +502,65 @@ namespace CodexProxyGuardian
             else
             {
                 _icon.ShowBalloonTip(3000, "Codex 代理守护", result, ToolTipIcon.Info);
+            }
+        }
+
+        private void ViewLog()
+        {
+            string logFile = _root == null ? null : Path.Combine(_root, "logs", "daemon.log");
+            if (logFile == null || !File.Exists(logFile))
+            {
+                MessageBox.Show("日志文件不存在：" + logFile, "Codex 代理守护", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            string content;
+            try
+            {
+                var lines = File.ReadAllLines(logFile, Encoding.UTF8);
+                int take = Math.Min(25, lines.Length);
+                var sb = new StringBuilder();
+                for (int i = lines.Length - take; i < lines.Length; i++) { sb.AppendLine(lines[i]); }
+                content = sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("读取日志失败：" + ex.Message, "Codex 代理守护", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            using (var f = new Form())
+            {
+                f.Text = "Codex 代理守护 - 最近日志";
+                f.Width = 780;
+                f.Height = 430;
+                f.StartPosition = FormStartPosition.CenterScreen;
+                var tb = new TextBox();
+                tb.Multiline = true;
+                tb.ReadOnly = true;
+                tb.ScrollBars = ScrollBars.Vertical;
+                tb.Dock = DockStyle.Fill;
+                tb.Font = new Font("Consolas", 9.5F);
+                tb.Text = content;
+                f.Controls.Add(tb);
+                f.ShowDialog();
+            }
+        }
+
+        private void EditConfig()
+        {
+            string cfg = _root == null ? null : Path.Combine(_root, "config", "daemon.config.json");
+            if (cfg == null || !File.Exists(cfg))
+            {
+                MessageBox.Show("配置文件不存在：" + cfg, "Codex 代理守护", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            try
+            {
+                Process.Start("notepad.exe", "\"" + cfg + "\"");
+                _icon.ShowBalloonTip(2500, "Codex 代理守护", "保存后守护会自动热重载配置，无需重启", ToolTipIcon.Info);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("打开配置失败：" + ex.Message, "Codex 代理守护", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

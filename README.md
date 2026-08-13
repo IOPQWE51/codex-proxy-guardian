@@ -27,8 +27,11 @@ codex-proxy-guardian/
 ├── scripts/
 │   ├── codex-proxy-guardian.ps1   # 守护核心（-Test 单次检测，无参常驻）
 │   ├── tray-helper.ps1            # 托盘控制台的 PowerShell 后端
-│   ├── install-daemon.ps1         # 注册计划任务 CodexProxyDaemon（登录自启）
-│   ├── uninstall-daemon.ps1       # 移除任务（-ClearEnv 清变量 / -DisableSystemProxy 关系统代理）
+│   ├── setup.ps1                  # 一键安装：守护任务 + 托盘自启（-StartTray 立即打开托盘）
+│   ├── install-daemon.ps1         # 注册计划任务 CodexProxyDaemon（登录自启，含崩溃自动重启）
+│   ├── uninstall-all.ps1          # 一键完整卸载：任务 + 托盘自启 + 环境变量 + 系统代理
+│   ├── uninstall-daemon.ps1       # 移除守护任务（-ClearEnv 清变量 / -DisableSystemProxy 关系统代理）
+│   ├── diagnose.ps1               # 只读诊断：任务/状态/环境/系统代理/Clash API/出口探活
 │   └── build-tray.ps1             # 用系统 csc.exe 编译托盘程序
 ├── src/GuardianTray.cs            # 托盘控制台源码（WinForms，C#）
 ├── dist/GuardianTray.exe          # 已编译托盘程序
@@ -44,9 +47,15 @@ codex-proxy-guardian/
 git clone https://github.com/IOPQWE51/codex-proxy-guardian.git
 cd codex-proxy-guardian
 
-.\scripts\install-daemon.ps1              # 注册计划任务（登录自启、静默）
-Start-ScheduledTask -TaskName 'CodexProxyDaemon'   # 立即启动
-.\dist\GuardianTray.exe                   # 可选：托盘控制台
+.\scripts\setup.ps1 -StartTray           # 一键安装：守护任务 + 托盘自启 + 立即打开托盘
+```
+
+等价的分步安装：
+
+```powershell
+.\scripts\install-daemon.ps1
+Start-ScheduledTask -TaskName 'CodexProxyDaemon'
+.\dist\GuardianTray.exe
 ```
 
 验证：
@@ -65,6 +74,8 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 .\scripts\codex-proxy-guardian.ps1 -Test -DryRun   # 只检测不修改
 .\scripts\codex-proxy-guardian.ps1 -Test            # 单次检测并应用
 # 无参数 = 常驻模式（由计划任务调用）
+
+.\scripts\diagnose.ps1    # 只读诊断：任务/状态/Clash API/出口探活，退出码 0=正常
 ```
 
 ### 托盘控制台
@@ -78,7 +89,9 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 - 托盘开机自启（写入 HKCU Run）
 - **切换节点**：显示所有 Clash 选择器组及其节点列表，当前节点加粗标记，点击即可切换
 - **重启 Codex 应用**：确认后关闭并重启 Codex（仅在确认后执行，对话会断开）
-- 打开日志/配置目录；安装 / 卸载守护任务
+- 查看最近日志（弹窗）；打开日志目录
+- 编辑配置（记事本打开，保存后守护自动热重载）；打开配置目录
+- 安装 / 卸载守护任务；完整卸载请用 `scripts\uninstall-all.ps1`
 
 托盘每 15 秒刷新一次状态，代理上下线切换会弹出气泡通知。节点列表每次展开时通过 Clash API 实时查询，支持实时切换。
 
@@ -110,9 +123,12 @@ Get-ScheduledTask -TaskName 'CodexProxyDaemon' | Get-ScheduledTaskInfo
 ## 卸载
 
 ```powershell
-.\scripts\uninstall-daemon.ps1 -ClearEnv -DisableSystemProxy   # 完整清理
+.\scripts\uninstall-all.ps1            # 一键完整卸载（任务 + 托盘自启 + 清环境变量 + 关系统代理）
+.\scripts\uninstall-all.ps1 -KeepProxy # 仅移除任务与自启，保留代理设置
+.\scripts\uninstall-daemon.ps1 -ClearEnv -DisableSystemProxy   # 只卸载守护任务
 ```
 
+卸载会同时结束仍在运行的守护进程，不会留下孤儿进程；卸载后目录可整体删除。
 托盘程序退出即移除；`托盘开机自启` 可在托盘菜单取消。
 
 ## 自测
