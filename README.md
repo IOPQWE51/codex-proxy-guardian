@@ -143,6 +143,7 @@ Get-Content state.json                    # proxyUp / node / message
 - **添加新的国内 API 直连**：运行 `.\scripts\add-direct.ps1 https://api.xxx.com`，
  自动写入 `config\daemon.config.json` 的 `directDomains`（守护 <=35s 热重载生效）；
  加 `-SyncDefaults` 可同步 PS / C# 默认清单与 README 家数。
+ 托盘入口：右键托盘图标 →「添加直连 API」，支持一次填写多个 Base URL（空格/换行分隔）。
 - **DeepSeek 直连**：确保 `directDomains` 含 `*.deepseek.com`；守护在线时会把它写入
   `NO_PROXY`，Clash 重启或换节点不影响直连。
 - **换国外模型**：改 Codex provider 即可，代理端口由守护自动写入，无需改脚本。
