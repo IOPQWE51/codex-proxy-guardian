@@ -244,7 +244,18 @@ namespace CodexProxyGuardian
 
         private void ActionClick(string label)
         {
-            if (label == "添加直连 API") { if (_openAddDirect != null) { _openAddDirect(); } }
+            if (label == "添加直连 API")
+            {
+                if (_openAddDirect != null)
+                {
+                    Form f = _openAddDirect();
+                    if (f != null)
+                    {
+                        using (f) { f.ShowDialog(); }
+                    }
+                    RefreshStateAsync();
+                }
+            }
             else if (label == "只读检测") { RunDetect(); }
             else if (label == "重启 Codex") { RestartCodex(); }
             else { EditConfig(); }
