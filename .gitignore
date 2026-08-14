@@ -1,2 +1,5 @@
 logs/
 state.json
+
+# brainstorm visual companion sessions
+.superpowers/
