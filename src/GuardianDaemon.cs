@@ -21,7 +21,7 @@ namespace CodexProxyGuardian
 {
     internal static class DaemonProgram
     {
-        private const string DaemonVersion = "2.4.0";
+        private const string DaemonVersion = "2.4.1";
         private const string MutexName = "CodexProxyDaemonMutex";
         private const string InetKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
@@ -475,10 +475,20 @@ namespace CodexProxyGuardian
 
         // ---------- 环境变量 ----------
 
+        private static int EffectivePort(bool up, int port)
+        {
+            // 宽限期内 API 可能暂时不可达（port=0），沿用上一个已知端口，
+            // 避免把 http://127.0.0.1:0 写入环境变量/系统代理
+            int eff = port;
+            if (up && eff <= 0 && _lastPort > 0) { eff = _lastPort; }
+            return eff;
+        }
+
         private static bool ApplyEnv(bool up, int port)
         {
-            string proxy = (up && port > 0) ? "http://127.0.0.1:" + port : "";
-            string noProxy = (up && port > 0) ? _config.NoProxy : "";
+            int effPort = EffectivePort(up, port);
+            string proxy = (up && effPort > 0) ? "http://127.0.0.1:" + effPort : "";
+            string noProxy = (up && effPort > 0) ? _config.NoProxy : "";
             bool changed = false;
             if (SetEnvVar("HTTP_PROXY", proxy)) { changed = true; }
             if (SetEnvVar("HTTPS_PROXY", proxy)) { changed = true; }
@@ -537,6 +547,7 @@ namespace CodexProxyGuardian
         private static bool ApplyInet(bool up, int port)
         {
             bool changed = false;
+            int effPort = EffectivePort(up, port);
             try
             {
                 int curEnable = 0;
@@ -551,9 +562,9 @@ namespace CodexProxyGuardian
                         curOverride = AsString(k.GetValue("ProxyOverride", ""));
                     }
                 }
-                if (up && port > 0)
+                if (up && effPort > 0)
                 {
-                    string server = "127.0.0.1:" + port;
+                    string server = "127.0.0.1:" + effPort;
                     if (curEnable != 1 || curServer != server)
                     {
                         using (RegistryKey k = Registry.CurrentUser.CreateSubKey(InetKeyPath))
@@ -605,7 +616,7 @@ namespace CodexProxyGuardian
                 d["version"] = DaemonVersion;
                 d["updatedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 d["proxyUp"] = s.Up;
-                d["port"] = s.Port;
+                d["port"] = EffectivePort(s.Up, s.Port);
                 d["node"] = s.Node;
                 d["mode"] = s.Mode;
                 d["envChanged"] = envChanged;
@@ -628,6 +639,7 @@ namespace CodexProxyGuardian
 
         private static void ApplyState(DetectedState s)
         {
+            int effPort = EffectivePort(s.Up, s.Port);
             bool envChanged = ApplyEnv(s.Up, s.Port);
             bool inetChanged = ApplyInet(s.Up, s.Port);
             DateTime now = DateTime.Now;
@@ -636,11 +648,11 @@ namespace CodexProxyGuardian
             {
                 if (!_lastUp)
                 {
-                    WriteLog("代理上线：端口 " + s.Port + "，节点 " + s.Node + "，模式 " + s.Mode);
+                    WriteLog("代理上线：端口 " + effPort + "，节点 " + s.Node + "，模式 " + s.Mode);
                 }
-                else if (_lastPort > 0 && _lastPort != s.Port)
+                else if (_lastPort > 0 && _lastPort != effPort)
                 {
-                    WriteLog("代理端口变化：" + _lastPort + " -> " + s.Port);
+                    WriteLog("代理端口变化：" + _lastPort + " -> " + effPort);
                 }
                 else if (_lastNode.Length > 0 && _lastNode != s.Node && (now - _lastNodeLogTime).TotalSeconds >= (double)_config.NodeLogCooldownSeconds)
                 {
@@ -659,7 +671,7 @@ namespace CodexProxyGuardian
             {
                 if (s.Up)
                 {
-                    WriteLog("已应用用户环境变量代理: http://127.0.0.1:" + s.Port);
+                    WriteLog("已应用用户环境变量代理: http://127.0.0.1:" + effPort);
                 }
                 else
                 {
@@ -682,7 +694,7 @@ namespace CodexProxyGuardian
             string message;
             if (s.Up)
             {
-                message = (s.ApiOk && s.Health) ? "proxy up, port=" + s.Port + ", node=" + s.Node : "proxy holding (grace), health check failing";
+                message = (s.ApiOk && s.Health) ? "proxy up, port=" + effPort + ", node=" + s.Node : "proxy holding (grace), health check failing";
             }
             else
             {

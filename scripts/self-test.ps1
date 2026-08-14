@@ -29,7 +29,7 @@ function Assert-True {
 
 # ---- 提取守护脚本中的函数（隔离运行，不执行入口） ----
 $src = Get-Content -Raw -LiteralPath $guardian
-foreach ($fn in @('Clamp-Int', 'Merge-OverrideList', 'Get-DaemonConfig', 'Get-DetectedState', 'Get-LogFreeMB', 'Invoke-LogCleanup', 'Write-Log', 'Reload-ConfigIfChanged', 'Test-ProxyHealth')) {
+foreach ($fn in @('Clamp-Int', 'Merge-OverrideList', 'Get-DaemonConfig', 'Get-DetectedState', 'Get-LogFreeMB', 'Invoke-LogCleanup', 'Write-Log', 'Reload-ConfigIfChanged', 'Test-ProxyHealth', 'Get-EffectivePort', 'Get-DesiredEnvState')) {
     $m = [regex]::Match($src, "(?ms)^function $fn \{.*?^}")
     if (-not $m.Success) { throw "未找到函数 $fn（守护脚本结构可能已变化）" }
     Invoke-Expression $m.Value
@@ -273,6 +273,18 @@ try {
 } finally {
     if (Test-Path -LiteralPath $tmpDir7) { Remove-Item -LiteralPath $tmpDir7 -Recurse -Force }
 }
+
+"=== 11. 宽限端口保持（Get-EffectivePort / Get-DesiredEnvState） ==="
+$script:lastPort = 7890
+$script:Config = @{ noProxy = 'localhost,*.deepseek.com' }
+Assert-True ((Get-EffectivePort -Up $true -Port 0) -eq 7890) '宽限期 port=0 沿用已知端口'
+Assert-True ((Get-EffectivePort -Up $true -Port 8080) -eq 8080) '在线时使用当前端口'
+Assert-True ((Get-EffectivePort -Up $false -Port 0) -eq 0) '下线时不保留端口'
+$des = Get-DesiredEnvState -Up $true -Port 0
+Assert-True ($des['HTTP_PROXY'] -eq 'http://127.0.0.1:7890') '宽限期环境变量保持旧端口'
+Assert-True ($des['NO_PROXY'] -eq 'localhost,*.deepseek.com') '宽限期 NO_PROXY 保持'
+$des2 = Get-DesiredEnvState -Up $false -Port 0
+Assert-True ($des2['HTTP_PROXY'] -eq '') '下线时清空环境变量'
 
 ""
 "结果: PASS=$($script:pass) FAIL=$($script:fail)"

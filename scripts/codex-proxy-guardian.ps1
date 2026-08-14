@@ -42,7 +42,7 @@ $script:failCount   = 0
 $script:firstFailAt = [datetime]::MinValue
 $script:lastUp      = $true
 $script:seenUp        = $false
-$script:DaemonVersion = '2.4.0'
+$script:DaemonVersion = '2.4.1'
 $script:configLastWrite = [datetime]::MinValue
 $script:lastPort    = 0
 $script:lastNode    = ''
@@ -413,11 +413,21 @@ function Get-UserEnvProxyState {
     return $result
 }
 
+function Get-EffectivePort {
+    param([bool]$Up, [int]$Port)
+    # 宽限期内 API 可能暂时不可达（Port=0），沿用上一个已知端口，
+    # 避免把 http://127.0.0.1:0 写入环境变量/系统代理
+    $eff = $Port
+    if ($Up -and $eff -le 0 -and $script:lastPort -gt 0) { $eff = $script:lastPort }
+    return $eff
+}
+
 function Get-DesiredEnvState {
     param([bool]$Up, [int]$Port)
     $desired = @{}
-    if ($Up -and $Port -gt 0) {
-        $proxy = "http://127.0.0.1:$Port"
+    $effPort = Get-EffectivePort -Up $Up -Port $Port
+    if ($Up -and $effPort -gt 0) {
+        $proxy = "http://127.0.0.1:$effPort"
         $desired['HTTP_PROXY']  = $proxy
         $desired['HTTPS_PROXY'] = $proxy
         $desired['ALL_PROXY']   = $proxy
@@ -496,8 +506,9 @@ function Set-WinInetState {
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
     $current = Get-WinInetState
     $changed = $false
-    if ($Up -and $Port -gt 0) {
-        $server = "127.0.0.1:$Port"
+    $effPort = Get-EffectivePort -Up $Up -Port $Port
+    if ($Up -and $effPort -gt 0) {
+        $server = "127.0.0.1:$effPort"
         if ($current.ProxyEnable -ne 1 -or $current.ProxyServer -ne $server) {
             Set-ItemProperty -Path $key -Name ProxyEnable -Value 1
             Set-ItemProperty -Path $key -Name ProxyServer -Value $server
@@ -528,7 +539,7 @@ function Update-StateFile {
         version            = $script:DaemonVersion
         updatedAt          = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
         proxyUp            = $State.Up
-        port               = $State.Port
+        port               = (Get-EffectivePort -Up $State.Up -Port $State.Port)
         node               = $State.Node
         mode               = $State.Mode
         envChanged         = $EnvChanged
@@ -545,15 +556,16 @@ function Update-StateFile {
 
 function Invoke-ApplyProxyState {
     param($State)
+    $effPort = Get-EffectivePort -Up $State.Up -Port $State.Port
     $envChanged = Set-UserEnvState -Desired (Get-DesiredEnvState -Up $State.Up -Port $State.Port)
     $inetChanged = Set-WinInetState -Up $State.Up -Port $State.Port
     $now = [datetime]::Now
 
     if ($State.Up) {
         if (-not $script:lastUp) {
-            Write-Log "代理上线：端口 $($State.Port)，节点 $($State.Node)，模式 $($State.Mode)"
-        } elseif ($script:lastPort -gt 0 -and $script:lastPort -ne $State.Port) {
-            Write-Log "代理端口变化：$script:lastPort -> $($State.Port)"
+            Write-Log "代理上线：端口 $effPort，节点 $($State.Node)，模式 $($State.Mode)"
+        } elseif ($script:lastPort -gt 0 -and $script:lastPort -ne $effPort) {
+            Write-Log "代理端口变化：$script:lastPort -> $effPort"
         } elseif ($script:lastNode -ne '' -and $script:lastNode -ne $State.Node -and ($now - $script:lastNodeLogTime).TotalSeconds -ge [double]$script:Config.nodeLogCooldownSeconds) {
             Write-Log "代理节点变化：$script:lastNode -> $($State.Node)"
             $script:lastNodeLogTime = $now
@@ -565,7 +577,7 @@ function Invoke-ApplyProxyState {
     }
     if ($envChanged) {
         if ($State.Up) {
-            Write-Log "已应用用户环境变量代理: http://127.0.0.1:$($State.Port)"
+            Write-Log "已应用用户环境变量代理: http://127.0.0.1:$effPort"
         } else {
             Write-Log '已清空用户环境变量代理'
         }
@@ -581,7 +593,7 @@ function Invoke-ApplyProxyState {
     $codexRunning = ($null -ne (Get-Process -Name 'codex' -ErrorAction SilentlyContinue))
     if ($State.Up) {
         if ($State.ApiOk -and $State.Health) {
-            $message = "proxy up, port=$($State.Port), node=$($State.Node)"
+            $message = "proxy up, port=$effPort, node=$($State.Node)"
         } else {
             $message = "proxy holding (grace), health check failing"
         }
