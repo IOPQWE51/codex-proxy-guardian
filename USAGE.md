@@ -28,6 +28,8 @@
 ```
 ## Tray console
 
+- **图形化主界面**：双击托盘图标打开；提供状态条、四张卡片（白名单/节点/日志/守护）与常用操作按钮。
+
 `dist\GuardianTray.exe` provides a system-tray UI: status details (task, proxy up/down, node,
 env vars, system proxy), read-only detect, start/stop daemon, pause/resume logon autostart,
 tray autostart, log/config folders, install/uninstall. It refreshes every 15 s and shows a

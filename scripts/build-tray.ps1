@@ -17,6 +17,10 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $scriptDir
 $src = Join-Path $root 'src\GuardianTray.cs'
 $src2 = Join-Path $root 'src\AddDirectForm.cs'
+$src3 = Join-Path $root 'src\GuardianMainForm.cs'
+$src4 = Join-Path $root 'src\DirectListForm.cs'
+$src5 = Join-Path $root 'src\NodesForm.cs'
+$src6 = Join-Path $root 'src\LogViewForm.cs'
 $dist = Join-Path $root 'dist'
 $out = Join-Path $dist 'GuardianTray.exe'
 
@@ -31,8 +35,13 @@ if (-not (Test-Path -LiteralPath $csc)) { throw '未找到 csc.exe（需要 .NET
 if ((Test-Path -LiteralPath $out) -and -not $Force) {
     $srcTime = (Get-Item -LiteralPath $src).LastWriteTime
     $src2Time = (Get-Item -LiteralPath $src2).LastWriteTime
+    $src3Time = (Get-Item -LiteralPath $src3).LastWriteTime
+    $src4Time = (Get-Item -LiteralPath $src4).LastWriteTime
+    $src5Time = (Get-Item -LiteralPath $src5).LastWriteTime
+    $src6Time = (Get-Item -LiteralPath $src6).LastWriteTime
     $outTime = (Get-Item -LiteralPath $out).LastWriteTime
-    if ($outTime -ge $srcTime -and $outTime -ge $src2Time) {
+    $allSrc = @($srcTime,$src2Time,$src3Time,$src4Time,$src5Time,$src6Time)
+    if ($outTime -ge ($allSrc | Measure-Object -Maximum).Maximum) {
         "已是最新: $out"
         exit 0
     }
@@ -40,7 +49,7 @@ if ((Test-Path -LiteralPath $out) -and -not $Force) {
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-& $csc /nologo /target:winexe /utf8output /win32icon:"$(Join-Path $dist 'guardian.ico')" /out:"$out" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "$src" "$src2"
+& $csc /nologo /target:winexe /utf8output /win32icon:"$(Join-Path $dist 'guardian.ico')" /out:"$out" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "$src" "$src2" "$src3" "$src4" "$src5" "$src6"
 if ($LASTEXITCODE -ne 0) { throw "编译失败，退出码 $LASTEXITCODE" }
 
 "编译完成: $out"

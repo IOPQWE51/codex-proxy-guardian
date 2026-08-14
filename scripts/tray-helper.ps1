@@ -73,7 +73,11 @@ switch ($Action) {
             'nextCheck='
             'version='
         }
-        foreach ($v in 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY') {
+            try {
+            $c = Get-Content -Raw -LiteralPath $cfgPath -Encoding UTF8 | ConvertFrom-Json
+            "directCount=" + @($c.directDomains).Count
+        } catch { 'directCount=0' }
+    foreach ($v in 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY') {
             $val = [Environment]::GetEnvironmentVariable($v, 'User')
             if ($null -eq $val) { $val = '' }
             "env$v=$val"

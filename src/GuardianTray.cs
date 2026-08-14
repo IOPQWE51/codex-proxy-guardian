@@ -76,6 +76,7 @@ namespace CodexProxyGuardian
         private Dictionary<string, string> _state = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private string _lastProxyUp = "";
         private bool _refreshing;
+        private GuardianMainForm _mainForm;
 
         [DllImport("user32.dll")]
         private static extern bool DestroyIcon(IntPtr handle);
@@ -104,6 +105,7 @@ namespace CodexProxyGuardian
             var menu = new ContextMenuStrip();
             menu.Items.Add(miHeader);
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("打开主界面", null, (s, e) => ShowMainForm());
             menu.Items.Add("状态详情", null, (s, e) => ShowStatus());
             menu.Items.Add("只读检测", null, (s, e) => RunDetect());
             menu.Items.Add(new ToolStripSeparator());
@@ -130,7 +132,7 @@ namespace CodexProxyGuardian
             _icon.Visible = true;
             _icon.ContextMenuStrip = menu;
             _icon.Text = "Codex 代理守护";
-            _icon.DoubleClick += (s, e) => ShowStatus();
+            _icon.DoubleClick += (s, e) => ShowMainForm();
 
             _timer = new System.Windows.Forms.Timer();
             _timer.Interval = 15000;
@@ -803,6 +805,30 @@ namespace CodexProxyGuardian
             }
         }
 
+
+        private void ShowMainForm()
+        {
+            if (_mainForm == null || _mainForm.IsDisposed)
+            {
+                _mainForm = new GuardianMainForm(
+                    RunHelper,
+                    BuildAddDirectForm,
+                    (title, state, extra) => { using (var f = new DirectListForm(RunHelper, BuildAddDirectForm)) { f.ShowDialog(); } return ""; },
+                    () => { using (var f = new NodesForm(RunHelper)) { f.ShowDialog(); } return ""; },
+                    () => { using (var f = new LogViewForm()) { f.ShowDialog(); } return ""; });
+                _mainForm.FormClosed += (s, e) => _mainForm = null;
+            }
+            _mainForm.Show();
+            _mainForm.Activate();
+        }
+
+        private Form BuildAddDirectForm()
+        {
+            return new AddDirectForm(RunHelper, (title, msg) =>
+            {
+                _icon.ShowBalloonTip(3500, title, msg, ToolTipIcon.Info);
+            });
+        }
         private void ExitApp()
         {
             _timer.Stop();
