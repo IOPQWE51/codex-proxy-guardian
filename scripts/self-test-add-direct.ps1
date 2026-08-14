@@ -13,6 +13,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $projectRoot 'src\GuardianDaemon.cs') -Destination (Join-Path $tmp 'src\GuardianDaemon.cs')
     Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $tmp 'README.md')
     Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts\add-direct.ps1') -Destination (Join-Path $tmp 'scripts\add-direct.ps1')
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts\tray-helper.ps1') -Destination (Join-Path $tmp 'scripts\tray-helper.ps1')
 
     function Assert-True($cond, $msg) {
         if ($cond) { "PASS  $msg" } else { throw "FAIL  $msg" }
@@ -56,6 +57,16 @@ try {
     Assert-True (-not (@($cfg.directDomains) -contains '*.dry1.cn')) 'DryRun 不写入'
     Assert-True ($out -match 'ADD \(dry\): \*\.dry1\.cn') 'DryRun 预览输出'
 
+
+    # --- 6) RemoveDirect 删除白名单 ---
+    $cfg = Get-Content -LiteralPath (Join-Path $tmp 'config\daemon.config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $cnt = @($cfg.directDomains).Count
+    $delOut = powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tmp 'scripts\tray-helper.ps1') 'RemoveDirect' -Value '*.test1.cn,*.raw.example.com' 2>&1
+    $delOut | Out-Null
+    $cfg = Get-Content -LiteralPath (Join-Path $tmp 'config\daemon.config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert-True (-not (@($cfg.directDomains) -contains '*.test1.cn')) 'RemoveDirect 删除 test1.cn'
+    Assert-True (-not (@($cfg.directDomains) -contains '*.raw.example.com')) 'RemoveDirect 删除 raw.example.com'
+    Assert-True ((@($cfg.directDomains).Count) -eq ($cnt - 2)) '删除后数量减少 2'
     '结果: 全部通过'
 }
 finally {

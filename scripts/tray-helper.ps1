@@ -194,5 +194,28 @@ switch ($Action) {
             [PSCustomObject]@{ ok = $true; added = $added; skipped = $skipped; errs = $errs } | ConvertTo-Json -Compress
         }
     }
+
+    'RemoveDirect' {
+        if ([string]::IsNullOrEmpty($Value)) { throw 'RemoveDirect 需要 Value 参数' }
+        $cfgPath2 = Join-Path $root 'config\daemon.config.json'
+        $enc2 = New-Object System.Text.UTF8Encoding($true)
+        $rules = @($Value -split '\s*,\s*' | Where-Object { $_ -ne '' })
+        if ($rules.Count -eq 0) { throw '未提供任何规则' }
+        $cfg = Get-Content -Raw -LiteralPath $cfgPath2 -Encoding UTF8 | ConvertFrom-Json
+        $list = @($cfg.directDomains)
+        $removed = @(); $missing = @()
+        foreach ($r in $rules) {
+            if ($list -contains $r) { $removed += $r } else { $missing += $r }
+        }
+        if ($removed.Count -gt 0) {
+            $cfg.directDomains = @($list | Where-Object { $removed -notcontains $_ })
+            $json = $cfg | ConvertTo-Json -Depth 20
+            [IO.File]::WriteAllText($cfgPath2, $json, $enc2)
+            $check = Get-Content -Raw -LiteralPath $cfgPath2 -Encoding UTF8 | ConvertFrom-Json
+            $still = @($check.directDomains | Where-Object { $removed -contains $_ })
+            if ($still.Count -gt 0) { throw "删除校验失败: $($still -join ',') 仍存在" }
+        }
+        [PSCustomObject]@{ ok = $true; removed = $removed; missing = $missing } | ConvertTo-Json -Compress
+    }
     default { throw "未知操作: $Action" }
 }
