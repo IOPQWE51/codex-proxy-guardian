@@ -116,6 +116,7 @@ namespace CodexProxyGuardian
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("查看日志", null, (s, e) => ViewLog());
             menu.Items.Add("打开日志目录", null, (s, e) => OpenFolder(_logDir));
+            menu.Items.Add("添加直连 API", null, (s, e) => ShowAddDirect());
             menu.Items.Add("编辑配置", null, (s, e) => EditConfig());
             menu.Items.Add("打开配置目录", null, (s, e) => OpenFolder(_configDir));
             menu.Items.Add(new ToolStripSeparator());
@@ -650,6 +651,18 @@ namespace CodexProxyGuardian
                 f.Controls.Add(tb);
                 f.ShowDialog();
             }
+        }
+
+        private void ShowAddDirect()
+        {
+            using (var f = new AddDirectForm(RunHelper, (title, msg) =>
+            {
+                _icon.ShowBalloonTip(3500, title, msg, ToolTipIcon.Info);
+            }))
+            {
+                f.ShowDialog();
+            }
+            RefreshState();
         }
 
         private void EditConfig()

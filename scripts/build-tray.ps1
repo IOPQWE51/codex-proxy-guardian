@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $scriptDir
 $src = Join-Path $root 'src\GuardianTray.cs'
+$src2 = Join-Path $root 'src\AddDirectForm.cs'
 $dist = Join-Path $root 'dist'
 $out = Join-Path $dist 'GuardianTray.exe'
 
@@ -29,8 +30,9 @@ if (-not (Test-Path -LiteralPath $csc)) { throw '未找到 csc.exe（需要 .NET
 
 if ((Test-Path -LiteralPath $out) -and -not $Force) {
     $srcTime = (Get-Item -LiteralPath $src).LastWriteTime
+    $src2Time = (Get-Item -LiteralPath $src2).LastWriteTime
     $outTime = (Get-Item -LiteralPath $out).LastWriteTime
-    if ($outTime -ge $srcTime) {
+    if ($outTime -ge $srcTime -and $outTime -ge $src2Time) {
         "已是最新: $out"
         exit 0
     }
@@ -38,7 +40,7 @@ if ((Test-Path -LiteralPath $out) -and -not $Force) {
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-& $csc /nologo /target:winexe /utf8output /win32icon:"$(Join-Path $dist 'guardian.ico')" /out:"$out" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "$src"
+& $csc /nologo /target:winexe /utf8output /win32icon:"$(Join-Path $dist 'guardian.ico')" /out:"$out" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll "$src" "$src2"
 if ($LASTEXITCODE -ne 0) { throw "编译失败，退出码 $LASTEXITCODE" }
 
 "编译完成: $out"
