@@ -27,6 +27,9 @@ namespace CodexProxyGuardian
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Accent = Color.FromArgb(37, 99, 235);
             BackColor = Color.White;
+            TitleText = "";
+            ValueText = "加载中…";
+            HintText = "";
             _t = new System.Windows.Forms.Timer();
             _t.Interval = 60;
             _t.Tick += (s, e) => { _t.Stop(); Refresh(); };
@@ -58,10 +61,10 @@ namespace CodexProxyGuardian
             { g.FillRectangle(b, 18, 16, 4, 34); }
             using (Font f = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
             using (SolidBrush b = new SolidBrush(Color.FromArgb(90, 98, 112)))
-            { g.DrawString(TitleText, f, b, 30, 16); }
+            { g.DrawString(TitleText ?? "", f, b, 30, 16); }
             using (Font f = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold))
             using (SolidBrush b = new SolidBrush(Color.FromArgb(25, 30, 40)))
-            { g.DrawString(ValueText, f, b, 30, 40); }
+            { g.DrawString(ValueText ?? "", f, b, 30, 40); }
             if (!string.IsNullOrEmpty(HintText))
             {
                 using (Font f = new Font("Microsoft YaHei UI", 8.5F))
@@ -123,6 +126,7 @@ namespace CodexProxyGuardian
             ClientSize = new Size(720, 540);
             BackColor = Color.FromArgb(245, 247, 250);
             Font = new Font("Microsoft YaHei UI", 9F);
+            DoubleBuffered = true;
 
             BuildHeader();
             BuildCards();
@@ -132,7 +136,7 @@ namespace CodexProxyGuardian
             _timer.Interval = 15000;
             _timer.Tick += (s, e) => RefreshStateAsync();
             _timer.Start();
-            RefreshStateAsync();
+            Shown += (s, e) => RefreshStateAsync();
         }
 
         private void BuildHeader()
@@ -147,6 +151,8 @@ namespace CodexProxyGuardian
             _badge.AutoSize = true;
             _badge.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold);
             _badge.Location = new Point(22, 12);
+            _badge.Text = "○ 状态检测中…";
+            _badge.ForeColor = Color.FromArgb(130, 138, 150);
             bar.Controls.Add(_badge);
 
             _headText = new Label();
@@ -154,6 +160,7 @@ namespace CodexProxyGuardian
             _headText.Font = new Font("Microsoft YaHei UI", 9F);
             _headText.ForeColor = Color.FromArgb(90, 98, 112);
             _headText.Location = new Point(22, 36);
+            _headText.Text = "正在读取守护状态…";
             bar.Controls.Add(_headText);
 
             var refresh = new Button();
