@@ -15,8 +15,10 @@
   上线即时恢复，下线有 90 秒时间窗滞后，频繁开关不会误清配置。
 - **境内直连白名单**：`directDomains`（12 家境内 API）自动并入 `NO_PROXY` 与系统代理绕过列表，
   DeepSeek、通义、Moonshot、讯飞、阶跃、零一、百川等官方 API 不经过代理。
-- **日志防写爆**：单文件上限 + 自动轮转（默认 2 MB × 3 份），日志写入连续失败时自动静默降级。
-  **磁盘空间防护**：磁盘剩余空间低于 64 MB 时停止写日志，绝不把磁盘写满。
+- **日志防写爆**：单文件上限 + 自动轮转（默认 2 MB × 3 份），日志写入连续失败时自动静默降级；
+  **总容量硬上限 200 MB**（`maxLogTotalMB`），超限自动删除最旧轮转文件，配置异常也顶不破。
+- **磁盘空间自愈**：磁盘剩余空间低于 2 GB 自动清理本守护的旧日志与临时文件（`logCleanupFreeMB`），
+  低于 512 MB 停止写日志（`logMinFreeMB`），绝不把磁盘写满；检查每 30 秒节流，主循环每轮也会巡检。
 - **单轮容错**：单轮检测异常只记录继续运行，不退出守护。
 - **静默常驻**：计划任务登录自启、隐藏窗口；崩溃时弹窗提示并写日志。
 - **正式图标**：`GuardianTray.exe` 与 `GuardianDaemon.exe` 均嵌入绿色圆形徽章图标（16/32/48 多尺寸）。
@@ -131,7 +133,10 @@ Get-Content state.json                    # proxyUp / node / message
 | `noProxy` / `proxyOverride` | 本机/内网默认 | 基线绕过列表，`directDomains` 会自动并入 |
 | `directDomains` | 12 家境内 API | 直连白名单（逗号分隔），覆盖 DeepSeek、通义、Moonshot、讯飞星火、阶跃星辰、零一万物、百川等 |
 | `nodeLogCooldownSeconds` | `60` | 节点切换日志节流 |
-| `maxLogBytes` / `maxLogFiles` | 2 MB / 3 | 日志上限与轮转份数 |
+| `maxLogBytes` / `maxLogFiles` | 2 MB / 3 | 单文件上限与轮转份数 |
+| `maxLogTotalMB` | `200` | 日志总容量硬上限：所有 `daemon.log*` 合计不超过该值，超限删最旧轮转文件 |
+| `logCleanupFreeMB` | `2048` | 磁盘剩余低于该值（MB）时自动清理本守护旧日志/临时文件 |
+| `logMinFreeMB` | `512` | 磁盘剩余低于该值（MB）时停止写日志，绝不把磁盘写满 |
 
 ## 常见问题
 
@@ -141,7 +146,8 @@ Get-Content state.json                    # proxyUp / node / message
 - **换环境部署**：整目录拷贝（`dist\GuardianDaemon.exe` 连同 `scripts/`、`config/`），
   或设置环境变量 `CODEX_PROXY_GUARDIAN_HOME` 指向项目根目录。
 - **代理软件非 FlClash**：只要暴露 Clash API，改 `clashApiUrl` 即可。
-- **磁盘满保护**：日志在磁盘剩余空间低于 64 MB 时自动停止写入，不影响守护正常运行。
+- **磁盘满保护**：磁盘剩余空间低于 2 GB 自动清理本守护旧日志；低于 512 MB 停止写日志；
+  日志总量硬上限 200 MB。守护本身产生的文件永远不会把磁盘写满。
 
 ## 卸载
 

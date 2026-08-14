@@ -42,13 +42,14 @@ $script:failCount   = 0
 $script:firstFailAt = [datetime]::MinValue
 $script:lastUp      = $true
 $script:seenUp        = $false
-$script:DaemonVersion = '2.3.0'
+$script:DaemonVersion = '2.4.0'
 $script:configLastWrite = [datetime]::MinValue
 $script:lastPort    = 0
 $script:lastNode    = ''
 $script:lastNodeLogTime = [datetime]::MinValue
 $script:logQuietUntil   = [datetime]::MinValue
 $script:logFailStreak   = 0
+$script:lastLogMain     = [datetime]::MinValue
 
 # 默认配置
 $script:DefaultConfig = @{
@@ -66,6 +67,9 @@ $script:DefaultConfig = @{
     nodeLogCooldownSeconds = 60
     maxLogBytes           = 2097152
     maxLogFiles           = 3
+    logMinFreeMB          = 512
+    logCleanupFreeMB      = 2048
+    maxLogTotalMB         = 200
 }
 
 $script:DefaultLogFile = Join-Path $script:LogDir 'daemon.log'
@@ -77,6 +81,44 @@ if (-not ('CodexDaemon.Native' -as [type])) {
 public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
 "@
     Add-Type -Namespace CodexDaemon -Name Native -MemberDefinition $memberDef
+}
+
+function Get-LogFreeMB {
+    # 返回日志所在磁盘剩余空间（MB）；无法获取时返回 $null
+    $logRoot = Split-Path -Qualifier $script:LogDir
+    if (-not $logRoot) { return $null }
+    $drive = Get-PSDrive -Name ($logRoot.TrimEnd(':').TrimEnd('\')) -ErrorAction SilentlyContinue
+    if ($null -eq $drive -or -not $drive.Free) { return $null }
+    return [long]($drive.Free / 1MB)
+}
+
+function Invoke-LogCleanup {
+    # 磁盘空间低时自动清理：删除本守护产生的临时文件与最旧轮转日志，尽量恢复空间。
+    # 只删自己管理范围内的文件，绝不碰用户数据。
+    try {
+        $freeMB = Get-LogFreeMB
+        if ($null -eq $freeMB) { return }
+        $cleanupMB = 2048
+        if ($null -ne $script:Config) {
+            $cleanupMB = [int]$script:Config.logCleanupFreeMB
+        }
+        if ($cleanupMB -lt 1) { $cleanupMB = 2048 }
+        if ($freeMB -ge $cleanupMB) { return }
+        # 1) 本守护产生的临时文件
+        Get-ChildItem -Path $script:LogDir -Filter '*.tmp' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        $tmpState = "$script:StatePath.tmp"
+        if (Test-Path -LiteralPath $tmpState) { Remove-Item -LiteralPath $tmpState -Force -ErrorAction SilentlyContinue }
+        # 2) 从最旧轮转日志开始删除，直到空间恢复或无可删
+        $maxFiles = 3
+        if ($null -ne $script:Config) { $maxFiles = [int]$script:Config.maxLogFiles }
+        if ($maxFiles -lt 1) { $maxFiles = 1 }
+        for ($i = $maxFiles; $i -ge 1; $i--) {
+            $freeMB = Get-LogFreeMB
+            if ($null -eq $freeMB -or $freeMB -ge $cleanupMB) { break }
+            $f = "$script:DefaultLogFile.$i"
+            if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+        }
+    } catch { }
 }
 
 function Write-Log {
@@ -91,11 +133,29 @@ function Write-Log {
     $ts = $now.ToString('yyyy-MM-dd HH:mm:ss')
     $line = "$ts $Message"
     try {
-        # 磁盘空间防护：剩余空间不足 64MB 时静默跳过，绝不把磁盘写满
-        $logRoot = Split-Path -Qualifier $script:LogDir
-        if ($logRoot) {
-            $drive = Get-PSDrive -Name ($logRoot.TrimEnd(':').TrimEnd('\'))
-            if ($null -ne $drive -and $drive.Free -lt (64MB)) { return }
+        # 磁盘空间防护（30 秒节流，避免每次写日志都枚举磁盘）：
+        # 低于清理阈值先自动清理旧日志/临时文件；仍低于停止阈值则跳过写日志
+        if ($null -eq $script:lastLogMain) { $script:lastLogMain = [datetime]::MinValue }
+        $doMaintenance = ($now - $script:lastLogMain).TotalSeconds -ge 30
+        if ($doMaintenance) {
+            $minFreeMB = 512
+            $cleanupFreeMB = 2048
+            if ($null -ne $script:Config) {
+                $minFreeMB = [int]$script:Config.logMinFreeMB
+                $cleanupFreeMB = [int]$script:Config.logCleanupFreeMB
+            }
+            if ($minFreeMB -lt 1) { $minFreeMB = 512 }
+            if ($cleanupFreeMB -lt 1) { $cleanupFreeMB = 2048 }
+            $freeMB = Get-LogFreeMB
+            if ($null -ne $freeMB) {
+                if ($freeMB -lt $cleanupFreeMB) { Invoke-LogCleanup }
+                $freeMB = Get-LogFreeMB
+                if ($null -ne $freeMB -and $freeMB -lt $minFreeMB) {
+                    $script:lastLogMain = $now
+                    return
+                }
+            }
+            $script:lastLogMain = $now
         }
         if (-not (Test-Path $script:LogDir)) {
             New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null
@@ -124,6 +184,26 @@ function Write-Log {
             }
         }
         Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8
+        # 总量硬上限（与磁盘检查同节流）：即使配置异常，所有日志文件合计也不超过 maxLogTotalMB
+        if ($doMaintenance) {
+            $totalMB = 200
+            if ($null -ne $script:Config) { $totalMB = [int]$script:Config.maxLogTotalMB }
+            if ($totalMB -lt 64) { $totalMB = 200 }
+            $capBytes = $totalMB * 1MB
+            $totalBytes = 0
+            $allLogs = @(Get-ChildItem -Path $script:LogDir -Filter 'daemon.log*' -File -ErrorAction SilentlyContinue)
+            foreach ($f in $allLogs) { $totalBytes += $f.Length }
+            if ($totalBytes -gt $capBytes) {
+                # 从最旧轮转文件开始删，直到总量低于上限；主日志始终保留
+                for ($i = $maxFiles; $i -ge 1; $i--) {
+                    $f = "$logFile.$i"
+                    if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force }
+                    $totalBytes = 0
+                    foreach ($g in @(Get-ChildItem -Path $script:LogDir -Filter 'daemon.log*' -File -ErrorAction SilentlyContinue)) { $totalBytes += $g.Length }
+                    if ($totalBytes -le $capBytes) { break }
+                }
+            }
+        }
         $script:logFailStreak = 0
     } catch {
         $script:logFailStreak++
@@ -162,6 +242,11 @@ function Get-DaemonConfig {
     $cfg['nodeLogCooldownSeconds'] = Clamp-Int $cfg['nodeLogCooldownSeconds'] 5 3600
     $cfg['maxLogBytes']            = Clamp-Int $cfg['maxLogBytes'] 102400 10485760
     $cfg['maxLogFiles']            = Clamp-Int $cfg['maxLogFiles'] 1 10
+    $cfg['logMinFreeMB']           = Clamp-Int $cfg['logMinFreeMB'] 64 65536
+    $cleanupMB                     = Clamp-Int $cfg['logCleanupFreeMB'] 256 65536
+    if ($cleanupMB -lt $cfg['logMinFreeMB']) { $cleanupMB = $cfg['logMinFreeMB'] }
+    $cfg['logCleanupFreeMB']       = $cleanupMB
+    $cfg['maxLogTotalMB']          = Clamp-Int $cfg['maxLogTotalMB'] 64 2048
     # proxyTestUrls 统一为数组
     $urls = @()
     foreach ($u in @($cfg['proxyTestUrls'])) {
@@ -536,6 +621,7 @@ try {
     while ($true) {
         try {
             Reload-ConfigIfChanged | Out-Null
+            Invoke-LogCleanup
             $state = Get-DetectedState -UseGrace
             Invoke-ApplyProxyState -State $state
         } catch {

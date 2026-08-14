@@ -21,9 +21,8 @@ namespace CodexProxyGuardian
 {
     internal static class DaemonProgram
     {
-        private const string DaemonVersion = "2.3.0";
+        private const string DaemonVersion = "2.4.0";
         private const string MutexName = "CodexProxyDaemonMutex";
-        private const long MinFreeBytes = 64L * 1024 * 1024;   // 磁盘剩余空间低于 64MB 时停止写日志
         private const string InetKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
         private sealed class DaemonConfig
@@ -42,6 +41,9 @@ namespace CodexProxyGuardian
             public int NodeLogCooldownSeconds = 60;
             public int MaxLogBytes = 2097152;
             public int MaxLogFiles = 3;
+            public int LogMinFreeMB = 512;
+            public int LogCleanupFreeMB = 2048;
+            public int MaxLogTotalMB = 200;
         }
 
         private sealed class DetectedState
@@ -70,6 +72,7 @@ namespace CodexProxyGuardian
         private static DateTime _lastNodeLogTime = DateTime.MinValue;
         private static int _logFailStreak;
         private static DateTime _logQuietUntil = DateTime.MinValue;
+        private static DateTime _lastLogMaintenance = DateTime.MinValue;
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         private static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
@@ -149,6 +152,7 @@ namespace CodexProxyGuardian
                     try
                     {
                         ReloadIfChanged();
+                        LogCleanup();
                         DetectedState s = Detect(true);
                         ApplyState(s);
                     }
@@ -256,6 +260,9 @@ namespace CodexProxyGuardian
                         if (dict.TryGetValue("nodeLogCooldownSeconds", out v)) { c.NodeLogCooldownSeconds = AsInt(v); }
                         if (dict.TryGetValue("maxLogBytes", out v)) { c.MaxLogBytes = AsInt(v); }
                         if (dict.TryGetValue("maxLogFiles", out v)) { c.MaxLogFiles = AsInt(v); }
+                        if (dict.TryGetValue("logMinFreeMB", out v)) { c.LogMinFreeMB = AsInt(v); }
+                        if (dict.TryGetValue("logCleanupFreeMB", out v)) { c.LogCleanupFreeMB = AsInt(v); }
+                        if (dict.TryGetValue("maxLogTotalMB", out v)) { c.MaxLogTotalMB = AsInt(v); }
                         if (dict.TryGetValue("noProxy", out v)) { c.NoProxy = AsString(v); }
                         if (dict.TryGetValue("proxyOverride", out v)) { c.ProxyOverride = AsString(v); }
                         if (dict.TryGetValue("directDomains", out v))
@@ -299,6 +306,10 @@ namespace CodexProxyGuardian
             c.NodeLogCooldownSeconds = ClampInt(c.NodeLogCooldownSeconds, 5, 3600);
             c.MaxLogBytes = ClampInt(c.MaxLogBytes, 102400, 10485760);
             c.MaxLogFiles = ClampInt(c.MaxLogFiles, 1, 10);
+            c.LogMinFreeMB = ClampInt(c.LogMinFreeMB, 64, 65536);
+            c.LogCleanupFreeMB = ClampInt(c.LogCleanupFreeMB, 256, 65536);
+            if (c.LogCleanupFreeMB < c.LogMinFreeMB) { c.LogCleanupFreeMB = c.LogMinFreeMB; }
+            c.MaxLogTotalMB = ClampInt(c.MaxLogTotalMB, 64, 2048);
             if (c.ProxyTestUrls == null || c.ProxyTestUrls.Count == 0)
             {
                 if (!string.IsNullOrEmpty(c.ProxyTestUrl)) { c.ProxyTestUrls = new List<string>(); c.ProxyTestUrls.Add(c.ProxyTestUrl); }
@@ -689,6 +700,55 @@ namespace CodexProxyGuardian
             _lastNode = s.Node;
         }
 
+        // ---------- 磁盘空间守护 ----------
+
+        private static long GetFreeMB()
+        {
+            try
+            {
+                string rootPath = Path.GetPathRoot(_logDir);
+                if (string.IsNullOrEmpty(rootPath)) { return -1; }
+                DriveInfo drive = new DriveInfo(rootPath);
+                if (!drive.IsReady) { return -1; }
+                return drive.AvailableFreeSpace / (1024L * 1024L);
+            }
+            catch { return -1; }
+        }
+
+        private static void LogCleanup()
+        {
+            // 磁盘空间低时自动清理：删除本守护产生的临时文件与最旧轮转日志，尽量恢复空间。
+            // 只删自己管理范围内的文件，绝不碰用户数据。
+            try
+            {
+                long freeMB = GetFreeMB();
+                int cleanupFreeMB = _config == null ? 2048 : _config.LogCleanupFreeMB;
+                if (cleanupFreeMB < 1) { cleanupFreeMB = 2048; }
+                if (freeMB < 0 || freeMB >= cleanupFreeMB) { return; }
+                // 1) 本守护产生的临时文件
+                if (Directory.Exists(_logDir))
+                {
+                    foreach (string f in Directory.GetFiles(_logDir, "*.tmp"))
+                    {
+                        try { File.Delete(f); } catch { }
+                    }
+                }
+                string tmpState = _statePath + ".tmp";
+                if (File.Exists(tmpState)) { try { File.Delete(tmpState); } catch { } }
+                // 2) 从最旧轮转日志开始删除，直到空间恢复或无可删
+                int maxFiles = _config == null ? 3 : _config.MaxLogFiles;
+                if (maxFiles < 1) { maxFiles = 1; }
+                for (int i = maxFiles; i >= 1; i--)
+                {
+                    freeMB = GetFreeMB();
+                    if (freeMB < 0 || freeMB >= cleanupFreeMB) { break; }
+                    string f = _logFile + "." + i;
+                    if (File.Exists(f)) { try { File.Delete(f); } catch { } }
+                }
+            }
+            catch { }
+        }
+
         // ---------- 日志（有界轮转 + 磁盘防护 + 静默窗口） ----------
 
         private static void WriteLog(string message)
@@ -703,12 +763,27 @@ namespace CodexProxyGuardian
             }
             try
             {
-                // 磁盘空间防护：剩余空间不足 64MB 时静默跳过，绝不把磁盘写满
-                string rootPath = Path.GetPathRoot(_logDir);
-                if (!string.IsNullOrEmpty(rootPath))
+                // 磁盘空间防护（30 秒节流，避免每次写日志都枚举磁盘）：
+                // 低于清理阈值先自动清理旧日志/临时文件；仍低于停止阈值则跳过写日志
+                bool doMaintenance = (now - _lastLogMaintenance).TotalSeconds >= 30;
+                if (doMaintenance)
                 {
-                    DriveInfo drive = new DriveInfo(rootPath);
-                    if (drive.IsReady && drive.AvailableFreeSpace < MinFreeBytes) { return; }
+                    int minFreeMB = _config == null ? 512 : _config.LogMinFreeMB;
+                    int cleanupFreeMB = _config == null ? 2048 : _config.LogCleanupFreeMB;
+                    if (minFreeMB < 1) { minFreeMB = 512; }
+                    if (cleanupFreeMB < 1) { cleanupFreeMB = 2048; }
+                    long freeMB = GetFreeMB();
+                    if (freeMB >= 0)
+                    {
+                        if (freeMB < cleanupFreeMB) { LogCleanup(); }
+                        freeMB = GetFreeMB();
+                        if (freeMB >= 0 && freeMB < minFreeMB)
+                        {
+                            _lastLogMaintenance = now;
+                            return;
+                        }
+                    }
+                    _lastLogMaintenance = now;
                 }
                 if (!Directory.Exists(_logDir)) { Directory.CreateDirectory(_logDir); }
                 int maxBytes = _config == null ? 2097152 : _config.MaxLogBytes;
@@ -741,7 +816,41 @@ namespace CodexProxyGuardian
                 {
                     File.AppendAllText(_logFile, line, new UTF8Encoding(false));
                 }
+                // 总量硬上限（与磁盘检查同节流）：即使配置异常，所有日志文件合计也不超过 MaxLogTotalMB
+                if (!doMaintenance) { _logFailStreak = 0; }
+                else
+                {
+                int totalMB = _config == null ? 200 : _config.MaxLogTotalMB;
+                if (totalMB < 64) { totalMB = 200; }
+                long capBytes = (long)totalMB * 1024L * 1024L;
+                long totalBytes = 0;
+                if (Directory.Exists(_logDir))
+                {
+                    foreach (string f in Directory.GetFiles(_logDir, "daemon.log*"))
+                    {
+                        try { totalBytes += new FileInfo(f).Length; } catch { }
+                    }
+                }
+                if (totalBytes > capBytes)
+                {
+                    // 从最旧轮转文件开始删，直到总量低于上限；主日志始终保留
+                    for (int i = maxFiles; i >= 1; i--)
+                    {
+                        string f = _logFile + "." + i;
+                        if (File.Exists(f)) { try { File.Delete(f); } catch { } }
+                        totalBytes = 0;
+                        if (Directory.Exists(_logDir))
+                        {
+                            foreach (string g in Directory.GetFiles(_logDir, "daemon.log*"))
+                            {
+                                try { totalBytes += new FileInfo(g).Length; } catch { }
+                            }
+                        }
+                        if (totalBytes <= capBytes) { break; }
+                    }
+                }
                 _logFailStreak = 0;
+                }
             }
             catch
             {

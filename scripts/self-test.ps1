@@ -29,7 +29,7 @@ function Assert-True {
 
 # ---- 提取守护脚本中的函数（隔离运行，不执行入口） ----
 $src = Get-Content -Raw -LiteralPath $guardian
-foreach ($fn in @('Clamp-Int', 'Merge-OverrideList', 'Get-DaemonConfig', 'Get-DetectedState', 'Write-Log', 'Reload-ConfigIfChanged', 'Test-ProxyHealth')) {
+foreach ($fn in @('Clamp-Int', 'Merge-OverrideList', 'Get-DaemonConfig', 'Get-DetectedState', 'Get-LogFreeMB', 'Invoke-LogCleanup', 'Write-Log', 'Reload-ConfigIfChanged', 'Test-ProxyHealth')) {
     $m = [regex]::Match($src, "(?ms)^function $fn \{.*?^}")
     if (-not $m.Success) { throw "未找到函数 $fn（守护脚本结构可能已变化）" }
     Invoke-Expression $m.Value
@@ -79,6 +79,9 @@ try {
         nodeLogCooldownSeconds = 60
         maxLogBytes = 2097152
         maxLogFiles = 3
+        logMinFreeMB = 512
+        logCleanupFreeMB = 2048
+        maxLogTotalMB = 200
         clashApiSecret = ''
     }
     $script:ConfigPath = $cfgPath
@@ -139,6 +142,7 @@ try {
     $script:Config = @{ maxLogBytes = 102400; maxLogFiles = 3 }
     $script:logQuietUntil = [datetime]::MinValue
     $script:logFailStreak = 0
+    $script:lastLogMain = [datetime]::MinValue
     for ($i = 0; $i -lt 1500; $i++) {
         Write-Log ('测试日志行 ' + $i + ' ' + ('x' * 100))
     }
@@ -161,6 +165,7 @@ try {
     $script:Config = @{ maxLogBytes = 4096; maxLogFiles = 3 }
     $script:logQuietUntil = [datetime]::MinValue
     $script:logFailStreak = 0
+    $script:lastLogMain = [datetime]::MinValue
     # 让日志目录路径被一个文件占用，使 New-Item/Add-Content 必然失败
     $script:LogDir = Join-Path $tmpDir3 'blocked.log'
     $script:DefaultLogFile = Join-Path $script:LogDir 'daemon.log'
@@ -223,6 +228,52 @@ Assert-True ($script:reqCount -eq 3) "尝试完所有 URL -> $($script:reqCount)
 $script:reqCount = 0
 $h3 = Test-ProxyHealth -Port 0
 Assert-True (-not $h3 -and $script:reqCount -eq 0) '端口无效直接离线且不请求'
+"=== 9. Invoke-LogCleanup 磁盘自动清理 ==="
+$tmpDir6 = Join-Path $env:TEMP ('cpd-clean-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tmpDir6 -Force | Out-Null
+try {
+    $script:LogDir = $tmpDir6
+    $script:DefaultLogFile = Join-Path $tmpDir6 'daemon.log'
+    $script:StatePath = Join-Path $tmpDir6 'state.json'
+    # cleanup 阈值设为极大值 → 一定触发清理
+    $script:Config = @{ maxLogFiles = 3; logCleanupFreeMB = [int]::MaxValue; logMinFreeMB = 512; maxLogTotalMB = 200; maxLogBytes = 102400 }
+    [IO.File]::WriteAllText((Join-Path $tmpDir6 'daemon.log'), 'current', (New-Object System.Text.UTF8Encoding($true)))
+    [IO.File]::WriteAllText((Join-Path $tmpDir6 'daemon.log.1'), 'old1', (New-Object System.Text.UTF8Encoding($true)))
+    [IO.File]::WriteAllText((Join-Path $tmpDir6 'daemon.log.2'), 'old2', (New-Object System.Text.UTF8Encoding($true)))
+    [IO.File]::WriteAllText((Join-Path $tmpDir6 'daemon.log.3'), 'old3', (New-Object System.Text.UTF8Encoding($true)))
+    [IO.File]::WriteAllText((Join-Path $tmpDir6 'daemon.log.tmp'), 'tmp', (New-Object System.Text.UTF8Encoding($true)))
+    [IO.File]::WriteAllText((Join-Path $tmpDir6 'state.json.tmp'), 'sttmp', (New-Object System.Text.UTF8Encoding($true)))
+    Invoke-LogCleanup
+    Assert-True (-not (Test-Path (Join-Path $tmpDir6 'daemon.log.3'))) '最旧轮转日志 .3 被清理'
+    Assert-True (-not (Test-Path (Join-Path $tmpDir6 'daemon.log.2'))) '轮转日志 .2 被清理'
+    Assert-True (-not (Test-Path (Join-Path $tmpDir6 'daemon.log.1'))) '轮转日志 .1 被清理'
+    Assert-True (-not (Test-Path (Join-Path $tmpDir6 'daemon.log.tmp'))) '临时日志被清理'
+    Assert-True (-not (Test-Path (Join-Path $tmpDir6 'state.json.tmp'))) 'state 临时文件被清理'
+    Assert-True (Test-Path (Join-Path $tmpDir6 'daemon.log')) '当前主日志保留'
+} finally {
+    if (Test-Path -LiteralPath $tmpDir6) { Remove-Item -LiteralPath $tmpDir6 -Recurse -Force }
+}
+
+"=== 10. maxLogTotalMB 配置钳制 ==="
+$tmpDir7 = Join-Path $env:TEMP ('cpd-total-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tmpDir7 -Force | Out-Null
+try {
+    $script:LogDir = $tmpDir7
+    $script:DefaultLogFile = Join-Path $tmpDir7 'daemon.log'
+    $script:StatePath = Join-Path $tmpDir7 'state.json'
+    # 非法/极端值：-10 应被钳制到最小 64MB；同时验证写入仍正常
+    $script:Config = @{ maxLogTotalMB = -10; maxLogBytes = 102400; maxLogFiles = 3 }
+    $script:logQuietUntil = [datetime]::MinValue
+    $script:logFailStreak = 0
+    Write-Log 'total cap test line'
+    Assert-True (Test-Path $script:DefaultLogFile) '写入正常（clamp 兜底有效）'
+    $totalBytes = 0
+    Get-ChildItem -Path $tmpDir7 -Filter 'daemon.log*' -File -Force -ErrorAction SilentlyContinue | ForEach-Object { $totalBytes += $_.Length }
+    Assert-True ($totalBytes -gt 0) "日志总量 > 0 -> $totalBytes"
+} finally {
+    if (Test-Path -LiteralPath $tmpDir7) { Remove-Item -LiteralPath $tmpDir7 -Recurse -Force }
+}
+
 ""
 "结果: PASS=$($script:pass) FAIL=$($script:fail)"
 if ($script:fail -gt 0) { exit 1 }

@@ -29,5 +29,8 @@
   ],
   "nodeLogCooldownSeconds": 60,
   "maxLogBytes": 2097152,
-  "maxLogFiles": 3
+  "maxLogFiles": 3,
+  "logMinFreeMB": 512,
+  "logCleanupFreeMB": 2048,
+  "maxLogTotalMB": 200
 }
