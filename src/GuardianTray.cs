@@ -75,6 +75,7 @@ namespace CodexProxyGuardian
 
         private Dictionary<string, string> _state = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private string _lastProxyUp = "";
+        private bool _refreshing;
 
         [DllImport("user32.dll")]
         private static extern bool DestroyIcon(IntPtr handle);
@@ -121,7 +122,8 @@ namespace CodexProxyGuardian
             menu.Items.Add("打开配置目录", null, (s, e) => OpenFolder(_configDir));
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出", null, (s, e) => ExitApp());
-            menu.Opening += (s, e) => RefreshState();
+            menu.CreateControl();
+            menu.Opening += (s, e) => RefreshStateAsync();
 
             _icon = new NotifyIcon();
             _icon.Icon = MakeIcon(Color.FromArgb(150, 150, 150));
@@ -132,7 +134,7 @@ namespace CodexProxyGuardian
 
             _timer = new System.Windows.Forms.Timer();
             _timer.Interval = 15000;
-            _timer.Tick += (s, e) => RefreshState();
+            _timer.Tick += (s, e) => RefreshStateAsync();
             _timer.Start();
 
             RefreshState();
@@ -216,8 +218,41 @@ namespace CodexProxyGuardian
 
         private void RefreshState()
         {
-            string text = RunHelper("State");
+            ApplyState(RunHelper("State"));
+        }
+
+        private void RefreshStateAsync()
+        {
+            if (_refreshing) { return; }
+            _refreshing = true;
+            ContextMenuStrip ctx = _icon.ContextMenuStrip;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                string text = RunHelper("State");
+                try
+                {
+                    if (ctx == null || ctx.IsDisposed)
+                    {
+                        _refreshing = false;
+                        return;
+                    }
+                    ctx.Invoke((Action)(() =>
+                    {
+                        try { ApplyState(text); }
+                        finally { _refreshing = false; }
+                    }));
+                }
+                catch
+                {
+                    _refreshing = false;
+                }
+            });
+        }
+
+        private void ApplyState(string text)
+        {
             _state = ParseFlat(text);
+
 
             string task = Get(_state, "task", "Unknown");
             string message = Get(_state, "message", "");
