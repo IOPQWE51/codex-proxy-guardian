@@ -58,38 +58,38 @@ foreach ($u in $rawInputs) {
     try {
         $r = ConvertTo-DirectRule -Raw $u
         if (-not $rules.Contains($r)) { $rules.Add($r) }
-    } catch { Write-Host "ERR: $u" }
+    } catch { Write-Output "ERR: $u" }
 }
-Write-Host "直连规则: $($rules -join ', ')"
+Write-Output "直连规则: $($rules -join ', ')"
 
 # --- 2) 与现有配置对比 ---
 $cfg = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $list = @($cfg.directDomains)
 $added = New-Object System.Collections.Generic.List[string]
 foreach ($r in $rules) {
-    if ($list -contains $r) { Write-Host "SKIP: $r" }
+    if ($list -contains $r) { Write-Output "SKIP: $r" }
     else { $added.Add($r) }
 }
 if ($DryRun) {
     foreach ($r in $rules) {
-        Write-Host "$(if ($added.Contains($r)) { 'ADD (dry):' } else { 'SKIP:' }) $r"
+        Write-Output "$(if ($added.Contains($r)) { 'ADD (dry):' } else { 'SKIP:' }) $r"
     }
-    Write-Host 'DryRun: 未写入任何文件'
+    Write-Output 'DryRun: 未写入任何文件'
     exit 0
 }
-if ($added.Count -eq 0) { Write-Host '全部已存在，无需修改'; exit 0 }
+if ($added.Count -eq 0) { Write-Output '全部已存在，无需修改'; exit 0 }
 
 # --- 3) 写运行配置 ---
 $cfg.directDomains = $list + @($added)
 $json = $cfg | ConvertTo-Json -Depth 20
 [IO.File]::WriteAllText($cfgPath, $json, $enc)
-Write-Host "已写入 config\daemon.config.json"
+Write-Output "已写入 config\daemon.config.json"
 
 # --- 4) 校验 ---
 $check = Get-Content -LiteralPath $cfgPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $missing = @($added | Where-Object { -not (@($check.directDomains) -contains $_) })
 if ($missing.Count -gt 0) { throw "校验失败: $($missing -join ', ') 未出现在配置中" }
-foreach ($r in $added) { Write-Host "ADD: $r" }
+foreach ($r in $added) { Write-Output "ADD: $r" }
 
 # --- 5) 同步默认清单（可选） ---
 if ($SyncDefaults) {
@@ -100,7 +100,7 @@ if ($SyncDefaults) {
 
     $t = [IO.File]::ReadAllText($psPath, $enc)
     foreach ($r in $added) {
-        if ($t.Contains($r)) { Write-Host "PS 默认清单已含 $r" }
+        if ($t.Contains($r)) { Write-Output "PS 默认清单已含 $r" }
         else {
             $m = [regex]::Match($t, 'directDomains\s*=\s*@\([^)]*\)')
             if (-not $m.Success) { throw 'PS 默认清单中未找到 directDomains 数组，请手动同步' }
@@ -109,11 +109,11 @@ if ($SyncDefaults) {
         }
     }
     [IO.File]::WriteAllText($psPath, $t, $enc)
-    Write-Host '已同步 PS 默认清单'
+    Write-Output '已同步 PS 默认清单'
 
     $t = [IO.File]::ReadAllText($csPath, $enc)
     foreach ($r in $added) {
-        if ($t.Contains($r)) { Write-Host "C# 默认清单已含 $r" }
+        if ($t.Contains($r)) { Write-Output "C# 默认清单已含 $r" }
         else {
             $ms = [regex]::Matches($t, 'c\.DirectDomains\.Add\("[^"]+"\);')
             if ($ms.Count -eq 0) { throw 'C# 默认清单中未找到 Add 调用，请手动同步' }
@@ -122,7 +122,7 @@ if ($SyncDefaults) {
         }
     }
     [IO.File]::WriteAllText($csPath, $t, $enc)
-    Write-Host '已同步 C# 默认清单'
+    Write-Output '已同步 C# 默认清单'
 
     $n = @($check.directDomains).Count
     $t = [IO.File]::ReadAllText($readmePath, $enc)
@@ -131,7 +131,7 @@ if ($SyncDefaults) {
         $oldN = [int]($m.Value -replace ' 家境内 API', '')
         $t = $t.Replace("$oldN 家境内 API", "$n 家境内 API")
         [IO.File]::WriteAllText($readmePath, $t, $enc)
-        Write-Host "README 家数已更新为 $n"
+        Write-Output "README 家数已更新为 $n"
     }
 }
-Write-Host '完成'
+Write-Output '完成'

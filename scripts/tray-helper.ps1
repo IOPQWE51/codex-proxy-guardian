@@ -9,7 +9,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$Action,
     [string]$Group,
-    [string]$Node
+    [string]$Node,
+    [string]$Value,
+    [switch]$SyncDefaults
 )
 
 $ErrorActionPreference = 'Stop'
@@ -164,5 +166,33 @@ switch ($Action) {
         "codex restarted ($started processes)"
     }
 
+
+    'AddDirect' {
+        if ([string]::IsNullOrEmpty($Value)) { throw 'AddDirect 需要 Value 参数' }
+        $addScript = Join-Path $root 'scripts\add-direct.ps1'
+        $urlArgs = @()
+        foreach ($u in ($Value -split '\s+|,')) {
+            $u = $u.Trim()
+            if ($u -ne '') { $urlArgs += $u }
+        }
+        if ($urlArgs.Count -eq 0) { throw '未提供任何 Base URL' }
+        $callArgs = @($urlArgs)
+        if ($SyncDefaults) { $callArgs += '-SyncDefaults' }
+        $out = & $addScript @callArgs 2>&1
+        $added = @(); $skipped = @(); $errs = @()
+        foreach ($line in @($out)) {
+            $ls = [string]$line
+            if ($ls -like 'ADD:*') { $added += $ls.Substring(4).Trim() }
+            elseif ($ls -like 'SKIP:*') { $skipped += $ls.Substring(5).Trim() }
+            elseif ($ls -like 'ERR:*') { $errs += $ls.Substring(4).Trim() }
+        }
+        if ($errs.Count -gt 0 -and $added.Count -eq 0) {
+            "ERR=" + ($errs -join '；')
+        } elseif ($added.Count -eq 0 -and $skipped.Count -eq 0) {
+            "ERR=未知结果: " + (($out | ForEach-Object { [string]$_ }) -join ' | ')
+        } else {
+            [PSCustomObject]@{ ok = $true; added = $added; skipped = $skipped; errs = $errs } | ConvertTo-Json -Compress
+        }
+    }
     default { throw "未知操作: $Action" }
 }
