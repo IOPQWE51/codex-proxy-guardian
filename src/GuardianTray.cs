@@ -293,7 +293,6 @@ namespace CodexProxyGuardian
 
         private void ShowStatus()
         {
-            RefreshState();
             using (var f = new Form())
             {
                 f.Text = "代理守护 · 状态";
@@ -302,61 +301,146 @@ namespace CodexProxyGuardian
                 f.MaximizeBox = false;
                 f.MinimizeBox = false;
                 f.ShowInTaskbar = false;
-                f.Width = 560;
+                f.ClientSize = new Size(760, 580);
+                f.Font = new Font("Microsoft YaHei UI", 9F);
 
                 var layout = new TableLayoutPanel();
                 layout.Dock = DockStyle.Fill;
                 layout.ColumnCount = 2;
-                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
                 layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                layout.Padding = new Padding(18, 14, 18, 4);
+                layout.Padding = new Padding(20, 16, 20, 10);
                 layout.AutoScroll = true;
 
-                string up = Get(_state, "proxyUp", "");
-                string headText;
-                Color headColor;
-                if (up == "True") { headText = "代理在线 · 端口 " + Get(_state, "port", "?"); headColor = Color.FromArgb(34, 160, 95); }
-                else if (up == "False") { headText = "代理已关闭 · 直连模式"; headColor = Color.FromArgb(216, 80, 80); }
-                else { headText = "状态未知"; headColor = Color.FromArgb(130, 130, 130); }
-
-                var head = new Label();
-                head.Text = headText;
-                head.Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
-                head.ForeColor = headColor;
+                Label head = new Label();
                 head.AutoSize = true;
-                head.Margin = new Padding(0, 2, 0, 14);
+                head.Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
+                head.Margin = new Padding(0, 0, 0, 14);
                 layout.Controls.Add(head, 0, 0);
                 layout.SetColumnSpan(head, 2);
 
+                var vals = new List<Label>();
+                var providers = new List<Func<string>>();
                 int row = 1;
-                AddRow(layout, ref row, "守护任务", TaskLabel(Get(_state, "task", "Unknown")));
-                AddRow(layout, ref row, "版本", Get(_state, "version", "-"));
-                AddRow(layout, ref row, "节点", Get(_state, "node", "-"));
-                AddRow(layout, ref row, "模式", Get(_state, "mode", "-"));
-                AddRow(layout, ref row, "下次检测", Get(_state, "nextCheck", "-"));
-                AddRow(layout, ref row, "消息", Get(_state, "message", "-"));
-                AddRow(layout, ref row, "HTTP_PROXY", EnvOrDash("HTTP_PROXY"));
-                AddRow(layout, ref row, "HTTPS_PROXY", EnvOrDash("HTTPS_PROXY"));
-                AddRow(layout, ref row, "ALL_PROXY", EnvOrDash("ALL_PROXY"));
-                AddRow(layout, ref row, "NO_PROXY", EnvOrDash("NO_PROXY"));
-                AddRow(layout, ref row, "系统代理", Get(_state, "sysProxy", "-"));
+
+                Action<string, Func<string>> addField = (name, provider) =>
+                {
+                    var lbl = new Label();
+                    lbl.Text = name;
+                    lbl.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
+                    lbl.ForeColor = Color.FromArgb(105, 105, 105);
+                    lbl.AutoSize = true;
+                    lbl.Anchor = AnchorStyles.Left;
+                    lbl.Margin = new Padding(0, 4, 10, 4);
+                    layout.Controls.Add(lbl, 0, row);
+
+                    var val = new Label();
+                    val.AutoSize = true;
+                    val.MaximumSize = new Size(540, 0);
+                    val.Anchor = AnchorStyles.Left;
+                    val.Margin = new Padding(0, 4, 10, 4);
+                    val.Font = new Font("Microsoft YaHei UI", 9F);
+                    val.ForeColor = Color.FromArgb(35, 35, 35);
+                    layout.Controls.Add(val, 1, row);
+                    vals.Add(val);
+                    providers.Add(provider);
+                    row++;
+                };
+
+                Func<string, string> sysField = part =>
+                {
+                    string s = Get(_state, "sysProxy", "");
+                    foreach (var kv in s.Split('|'))
+                    {
+                        int eq = kv.IndexOf('=');
+                        if (eq > 0 && kv.Substring(0, eq).Trim().Equals(part, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return kv.Substring(eq + 1).Trim();
+                        }
+                    }
+                    return "-";
+                };
+
+                addField("守护任务", () => TaskLabel(Get(_state, "task", "Unknown")));
+                addField("版本", () => Get(_state, "version", "-"));
+                addField("节点", () => Get(_state, "node", "-"));
+                addField("模式", () => Get(_state, "mode", "-"));
+                addField("下次检测", () => Get(_state, "nextCheck", "-"));
+                addField("消息", () => Get(_state, "message", "-"));
+                addField("HTTP_PROXY", () => EnvOrDash("HTTP_PROXY"));
+                addField("HTTPS_PROXY", () => EnvOrDash("HTTPS_PROXY"));
+                addField("ALL_PROXY", () => EnvOrDash("ALL_PROXY"));
+                addField("NO_PROXY", () => EnvOrDash("NO_PROXY"));
+                addField("系统代理", () => sysField("Enable") == "1" ? "已开启" : "已关闭");
+                addField("代理服务器", () => sysField("Server"));
                 if (_root == null)
                 {
-                    AddRow(layout, ref row, "警告", "未找到守护目录，请设置 CODEX_PROXY_GUARDIAN_HOME");
+                    addField("警告", () => "未找到守护目录，请设置 CODEX_PROXY_GUARDIAN_HOME");
                 }
 
-                var ok = new Button();
-                ok.Text = "关闭";
-                ok.Width = 88;
-                ok.DialogResult = DialogResult.Cancel;
-                ok.Anchor = AnchorStyles.Right;
-                ok.Margin = new Padding(0, 10, 0, 6);
-                ok.Click += (s, e) => f.Close();
-                layout.Controls.Add(ok, 1, row);
+                Action apply = () =>
+                {
+                    string up = Get(_state, "proxyUp", "");
+                    string headText;
+                    Color headColor;
+                    if (up == "True") { headText = "代理在线 · 端口 " + Get(_state, "port", "?"); headColor = Color.FromArgb(34, 160, 95); }
+                    else if (up == "False") { headText = "代理已关闭 · 直连模式"; headColor = Color.FromArgb(216, 80, 80); }
+                    else { headText = "状态未知"; headColor = Color.FromArgb(130, 130, 130); }
+                    head.Text = headText;
+                    head.ForeColor = headColor;
+                    for (int i = 0; i < vals.Count; i++)
+                    {
+                        vals[i].Text = providers[i]();
+                    }
+                };
+
+                var refreshBtn = new Button();
+                refreshBtn.Text = "刷新";
+                refreshBtn.Width = 88;
+                refreshBtn.Anchor = AnchorStyles.Right;
+
+                var closeBtn = new Button();
+                closeBtn.Text = "关闭";
+                closeBtn.Width = 88;
+                closeBtn.Anchor = AnchorStyles.Right;
+                closeBtn.Margin = new Padding(8, 0, 0, 0);
+                closeBtn.DialogResult = DialogResult.Cancel;
+                closeBtn.Click += (s, e) => f.Close();
+
+                var buttons = new FlowLayoutPanel();
+                buttons.FlowDirection = FlowDirection.RightToLeft;
+                buttons.AutoSize = true;
+                buttons.Margin = new Padding(0, 14, 0, 0);
+                buttons.Controls.Add(closeBtn);
+                buttons.Controls.Add(refreshBtn);
+                layout.Controls.Add(buttons, 1, row);
+
+                Action refreshAsync = null;
+                refreshAsync = () =>
+                {
+                    if (!refreshBtn.Enabled) { return; }
+                    refreshBtn.Enabled = false;
+                    System.Threading.Tasks.Task.Run(() =>
+                    {
+                        string text = RunHelper("State");
+                        try
+                        {
+                            if (f.IsDisposed) { return; }
+                            f.Invoke((Action)(() =>
+                            {
+                                _state = ParseFlat(text);
+                                apply();
+                                try { refreshBtn.Enabled = true; } catch { }
+                            }));
+                        }
+                        catch { }
+                    });
+                };
+                refreshBtn.Click += (s, e) => refreshAsync();
 
                 f.Controls.Add(layout);
-                int height = 150 + row * 34;
-                f.Height = Math.Min(580, Math.Max(340, height));
+                apply();
+                refreshAsync();
                 f.ShowDialog();
             }
         }
