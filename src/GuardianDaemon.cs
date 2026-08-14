@@ -228,6 +228,7 @@ namespace CodexProxyGuardian
             c.DirectDomains.Add("*.stepfun.com");
             c.DirectDomains.Add("*.lingyiwanwu.com");
             c.DirectDomains.Add("*.baichuan-ai.com");
+            c.DirectDomains.Add("*.longcat.chat");
             return c;
         }
 

@@ -13,7 +13,7 @@
   与 PS 版共享互斥锁，二者不可同时运行。
 - **FlClash 联动**：轮询 Clash 内核 API（默认 `127.0.0.1:9090`），取 `mixed-port` 作为代理端口；
   上线即时恢复，下线有 90 秒时间窗滞后，频繁开关不会误清配置。
-- **境内直连白名单**：`directDomains`（12 家境内 API）自动并入 `NO_PROXY` 与系统代理绕过列表，
+- **境内直连白名单**：`directDomains`（13 家境内 API）自动并入 `NO_PROXY` 与系统代理绕过列表，
   DeepSeek、通义、Moonshot、讯飞、阶跃、零一、百川等官方 API 不经过代理。
 - **日志防写爆**：单文件上限 + 自动轮转（默认 2 MB × 3 份），日志写入连续失败时自动静默降级；
   **总容量硬上限 200 MB**（`maxLogTotalMB`），超限自动删除最旧轮转文件，配置异常也顶不破。
@@ -131,7 +131,7 @@ Get-Content state.json                    # proxyUp / node / message
 | `proxyTestUrl` | gstatic generate_204 | 单个探活地址（兼容旧配置） |
 | `proxyTestUrls` | 3 条 URL | 探活 URL 数组，任一成功即判定在线；降低单点被墙导致的误判 |
 | `noProxy` / `proxyOverride` | 本机/内网默认 | 基线绕过列表，`directDomains` 会自动并入 |
-| `directDomains` | 12 家境内 API | 直连白名单（逗号分隔），覆盖 DeepSeek、通义、Moonshot、讯飞星火、阶跃星辰、零一万物、百川等 |
+| `directDomains` | 13 家境内 API | 直连白名单（逗号分隔），覆盖 DeepSeek、通义、Moonshot、讯飞星火、阶跃星辰、零一万物、百川、LongCatAI（美团）等 |
 | `nodeLogCooldownSeconds` | `60` | 节点切换日志节流 |
 | `maxLogBytes` / `maxLogFiles` | 2 MB / 3 | 单文件上限与轮转份数 |
 | `maxLogTotalMB` | `200` | 日志总容量硬上限：所有 `daemon.log*` 合计不超过该值，超限删最旧轮转文件 |
@@ -140,6 +140,9 @@ Get-Content state.json                    # proxyUp / node / message
 
 ## 常见问题
 
+- **添加新的国内 API 直连**：运行 `.\scripts\add-direct.ps1 https://api.xxx.com`，
+ 自动写入 `config\daemon.config.json` 的 `directDomains`（守护 <=35s 热重载生效）；
+ 加 `-SyncDefaults` 可同步 PS / C# 默认清单与 README 家数。
 - **DeepSeek 直连**：确保 `directDomains` 含 `*.deepseek.com`；守护在线时会把它写入
   `NO_PROXY`，Clash 重启或换节点不影响直连。
 - **换国外模型**：改 Codex provider 即可，代理端口由守护自动写入，无需改脚本。

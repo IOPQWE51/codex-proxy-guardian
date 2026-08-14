@@ -25,7 +25,8 @@
     "*.xfyun.cn",
     "*.stepfun.com",
     "*.lingyiwanwu.com",
-    "*.baichuan-ai.com"
+    "*.baichuan-ai.com",
+    "*.longcat.chat"
   ],
   "nodeLogCooldownSeconds": 60,
   "maxLogBytes": 2097152,
